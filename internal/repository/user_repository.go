@@ -1,0 +1,238 @@
+package repository
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"strings"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
+
+	"bulk-import-export/internal/domain"
+)
+
+// PostgresUserRepository implements UserRepository using PostgreSQL.
+type PostgresUserRepository struct {
+	pool *pgxpool.Pool
+}
+
+// NewPostgresUserRepository creates a new PostgresUserRepository.
+func NewPostgresUserRepository(pool *pgxpool.Pool) *PostgresUserRepository {
+	return &PostgresUserRepository{pool: pool}
+}
+
+// BulkInsert inserts users in bulk using CTE with pre-validation.
+func (r *PostgresUserRepository) BulkInsert(ctx context.Context, users []domain.User) domain.BatchResult {
+	result := domain.BatchResult{
+		SuccessCount: 0,
+		FailedCount:  0,
+		Errors:       []domain.RecordError{},
+	}
+
+	if len(users) == 0 {
+		return result
+	}
+
+	// Check for context cancellation before starting database operations
+	if err := ctx.Err(); err != nil {
+		result.FailedCount = len(users)
+		result.Errors = append(result.Errors, domain.RecordError{
+			Row:    0,
+			Field:  "database",
+			Reason: fmt.Sprintf("context cancelled: %v", err),
+		})
+		return result
+	}
+
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		result.FailedCount = len(users)
+		result.Errors = append(result.Errors, domain.RecordError{
+			Row:    0,
+			Field:  "database",
+			Reason: fmt.Sprintf("failed to begin transaction: %v", err),
+		})
+		return result
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	query, args := r.buildBulkInsertQuery(users)
+
+	rows, err := tx.Query(ctx, query, args...)
+	if err != nil {
+		result.FailedCount = len(users)
+		result.Errors = append(result.Errors, domain.RecordError{
+			Row:    0,
+			Field:  "database",
+			Reason: fmt.Sprintf("bulk insert failed: %v", err),
+		})
+		return result
+	}
+	defer rows.Close()
+
+	insertedRows := make(map[int]bool)
+	for rows.Next() {
+		var rowNum int
+		var success bool
+		var errorMsg *string
+
+		if err := rows.Scan(&rowNum, &success, &errorMsg); err != nil {
+			continue
+		}
+
+		if success {
+			insertedRows[rowNum] = true
+			result.SuccessCount++
+		} else {
+			result.FailedCount++
+			reason := "unknown error"
+			if errorMsg != nil {
+				reason = *errorMsg
+			}
+			result.Errors = append(result.Errors, domain.RecordError{
+				Row:    rowNum,
+				Field:  "email",
+				Reason: reason,
+			})
+		}
+	}
+
+	if err := rows.Err(); err != nil {
+		result.FailedCount = len(users) - result.SuccessCount
+		result.Errors = append(result.Errors, domain.RecordError{
+			Row:    0,
+			Field:  "database",
+			Reason: fmt.Sprintf("error reading results: %v", err),
+		})
+		return result
+	}
+
+	if result.SuccessCount > 0 {
+		if err := tx.Commit(ctx); err != nil {
+			result.FailedCount = len(users)
+			result.SuccessCount = 0
+			result.Errors = []domain.RecordError{{
+				Row:    0,
+				Field:  "database",
+				Reason: fmt.Sprintf("failed to commit transaction: %v", err),
+			}}
+			return result
+		}
+	}
+
+	return result
+}
+
+func (r *PostgresUserRepository) buildBulkInsertQuery(users []domain.User) (string, []interface{}) {
+	var values []string
+	var args []interface{}
+	argNum := 1
+
+	for i, u := range users {
+		values = append(values, fmt.Sprintf("($%d, $%d, $%d, $%d, $%d, $%d)",
+			argNum, argNum+1, argNum+2, argNum+3, argNum+4, argNum+5))
+		args = append(args, u.ID, u.Email, u.Name, u.Role, u.Active, i+1)
+		argNum += 6
+	}
+
+	// The query:
+	// 1. Collects input data with row numbers
+	// 2. Identifies emails that already exist in the DB
+	// 3. Separates valid rows (new emails) from invalid rows (duplicate emails)
+	// 4. Inserts valid rows and returns WHICH rows were actually inserted
+	// 5. Reports success only for rows that were actually inserted
+	query := fmt.Sprintf(`
+WITH input_data AS (
+    SELECT * FROM (VALUES %s) AS t(id, email, name, role, is_active, row_num)
+),
+existing_emails AS (
+    SELECT email FROM users WHERE email IN (SELECT email FROM input_data)
+),
+valid_rows AS (
+    SELECT id, email, name, role, is_active, row_num
+    FROM input_data
+    WHERE email NOT IN (SELECT email FROM existing_emails)
+),
+invalid_rows AS (
+    SELECT row_num, 'duplicate_email' AS error_reason
+    FROM input_data
+    WHERE email IN (SELECT email FROM existing_emails)
+),
+inserted AS (
+    INSERT INTO users (id, email, name, role, is_active, created_at, updated_at)
+    SELECT id::uuid, email, name, role, is_active::boolean, NOW(), NOW()
+    FROM valid_rows
+    ON CONFLICT (email) DO NOTHING
+    RETURNING email, 1 AS inserted
+)
+SELECT vr.row_num, 
+       CASE WHEN i.email IS NOT NULL THEN true ELSE false END AS success, 
+       CASE WHEN i.email IS NULL THEN 'concurrent_duplicate_email'::text ELSE NULL END AS error_message 
+FROM valid_rows vr
+LEFT JOIN inserted i ON vr.email = i.email
+UNION ALL
+SELECT row_num, false AS success, error_reason FROM invalid_rows
+ORDER BY row_num
+`, strings.Join(values, ", "))
+
+	return query, args
+}
+
+// StreamAll streams all users for export with O(1) memory.
+func (r *PostgresUserRepository) StreamAll(ctx context.Context, callback func(domain.User) error) error {
+	rows, err := r.pool.Query(ctx, `
+		SELECT id, email, name, role, is_active, created_at, updated_at
+		FROM users
+		ORDER BY created_at
+	`)
+	if err != nil {
+		return fmt.Errorf("query users: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var u domain.User
+		if err := rows.Scan(&u.ID, &u.Email, &u.Name, &u.Role, &u.Active, &u.CreatedAt, &u.UpdatedAt); err != nil {
+			return fmt.Errorf("scan user: %w", err)
+		}
+
+		if err := callback(u); err != nil {
+			if errors.Is(err, context.Canceled) {
+				return nil
+			}
+			return fmt.Errorf("callback error: %w", err)
+		}
+	}
+
+	return rows.Err()
+}
+
+// Count returns the total number of users.
+func (r *PostgresUserRepository) Count(ctx context.Context) (int64, error) {
+	var count int64
+	err := r.pool.QueryRow(ctx, "SELECT COUNT(*) FROM users").Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("count users: %w", err)
+	}
+	return count, nil
+}
+
+// GetByEmail finds a user by email.
+func (r *PostgresUserRepository) GetByEmail(ctx context.Context, email string) (*domain.User, error) {
+	var u domain.User
+	err := r.pool.QueryRow(ctx, `
+		SELECT id, email, name, role, is_active, created_at, updated_at
+		FROM users
+		WHERE email = $1
+	`, email).Scan(&u.ID, &u.Email, &u.Name, &u.Role, &u.Active, &u.CreatedAt, &u.UpdatedAt)
+
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get user by email: %w", err)
+	}
+
+	return &u, nil
+}

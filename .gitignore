@@ -1,1 +1,44 @@
+# macOS
 .DS_Store
+
+# Build artifacts
+bin/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+server
+
+# Test artifacts
+coverage.out
+coverage.html
+*.test
+*.out
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Export files
+exports/
+
+# Logs
+*.log
+
+# Dependency directories
+vendor/
+
+# Air (hot reload)
+tmp/
+
+# Docker
+.docker/

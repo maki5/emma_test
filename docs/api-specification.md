@@ -12,6 +12,31 @@ http://localhost:8080/v1
 
 ---
 
+## Request Tracing
+
+All endpoints support the `X-Request-ID` header for distributed tracing and debugging.
+
+**Behavior:**
+- If a request includes an `X-Request-ID` header, that value is used for tracing
+- If no header is provided, the server generates a UUID automatically
+- The request ID is included in response headers and server logs
+- For async jobs (imports/exports), the request ID is logged throughout the job lifecycle
+
+**Example:**
+```http
+POST /v1/imports HTTP/1.1
+X-Request-ID: req-12345-abcde
+Content-Type: multipart/form-data
+```
+
+**Response Header:**
+```http
+HTTP/1.1 202 Accepted
+X-Request-ID: req-12345-abcde
+```
+
+---
+
 ## Health Check
 
 ### GET /health
@@ -220,37 +245,16 @@ GET /v1/imports/550e8400-e29b-41d4-a716-446655440000 HTTP/1.1
     "total_records": 10000,
     "processed_records": 10000,
     "successful_records": 7985,
-    "error_records": 15,
-    "errors": [
-        {
-            "row": 42,
-            "field": "email",
-            "value": "duplicate@example.com",
-            "reason": "duplicate_email"
-        }
-    ],
-    "failed_batches": [
-        {
-            "batch_number": 3,
-            "records_in_batch": 1000,
-            "error": "connection timeout during insert"
-        },
-        {
-            "batch_number": 7,
-            "records_in_batch": 1000,
-            "error": "deadlock detected"
-        }
-    ],
+    "error_records": 2015,
     "started_at": "2024-01-15T10:30:00Z",
     "completed_at": "2024-01-15T10:30:45Z"
 }
 ```
 
 > **Note**: Status `completed_with_errors` means:
-> - Some batches failed but the import continued
-> - Successfully committed batches have their data persisted
-> - `failed_batches` array shows which batches were rolled back (records NOT imported)
-> - `errors` array shows validation errors from successful batches (records skipped but batch committed)
+> - Some records failed validation but processing continued
+> - Successfully processed records have their data persisted
+> - `error_records` shows the count of records that failed
 
 **Response (Failed):**
 ```json
@@ -274,25 +278,17 @@ GET /v1/imports/550e8400-e29b-41d4-a716-446655440000 HTTP/1.1
 
 ### GET /v1/imports
 
-List all import jobs with optional filtering.
+List all import jobs.
 
 **Request:**
 ```http
-GET /v1/imports?status=processing&limit=10 HTTP/1.1
+GET /v1/imports HTTP/1.1
 ```
-
-**Query Parameters:**
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `status` | string | No | Filter by status: `pending`, `processing`, `completed`, `failed`, `cancelled` |
-| `resource` | string | No | Filter by resource type: `users`, `articles`, `comments` |
-| `limit` | int | No | Max results to return (default: 50, max: 100) |
-| `offset` | int | No | Pagination offset |
 
 **Response:**
 ```json
 {
-    "jobs": [
+    "items": [
         {
             "job_id": "550e8400-e29b-41d4-a716-446655440000",
             "resource_type": "users",
@@ -308,9 +304,7 @@ GET /v1/imports?status=processing&limit=10 HTTP/1.1
             "started_at": "2024-01-15T10:31:00Z"
         }
     ],
-    "total": 42,
-    "limit": 10,
-    "offset": 0
+    "total": 2
 }
 ```
 
@@ -456,7 +450,6 @@ GET /v1/exports/550e8400-e29b-41d4-a716-446655440100 HTTP/1.1
     "status": "completed",
     "record_count": 150,
     "file_path": "./exports/users-export-2024-01-15-550e8400.ndjson",
-    "file_size_bytes": 15234,
     "download_url": "/v1/exports/550e8400-e29b-41d4-a716-446655440100/download",
     "started_at": "2024-01-15T10:35:00Z",
     "completed_at": "2024-01-15T10:35:02Z"

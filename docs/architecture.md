@@ -170,8 +170,6 @@ type ImportJob struct {
     ProcessedRecords int        `json:"processed_records"`
     SuccessfulRecords int       `json:"successful_records"`
     ErrorRecords     int        `json:"error_records"`
-    Errors           []RecordError `json:"errors,omitempty"`
-    FailedBatches    []FailedBatch `json:"failed_batches,omitempty"`
     FailureReason    string     `json:"failure_reason,omitempty"`
     StartedAt        *time.Time `json:"started_at,omitempty"`
     CompletedAt      *time.Time `json:"completed_at,omitempty"`
@@ -188,7 +186,6 @@ type ExportJob struct {
     Fields         []string   `json:"fields,omitempty"`
     RecordCount    int        `json:"record_count,omitempty"`
     FilePath       string     `json:"file_path,omitempty"`
-    FileSizeBytes  int64      `json:"file_size_bytes,omitempty"`
     DownloadURL    string     `json:"download_url,omitempty"`
     FailureReason  string     `json:"failure_reason,omitempty"`
     StartedAt      *time.Time `json:"started_at,omitempty"`
@@ -588,31 +585,19 @@ HTTP Request (multipart/remote URL)
 // Trade-off: Partial data may exist if some batches fail.
 
 type BatchResult struct {
-    BatchNumber int                   `json:"batch_number"`
-    Successful  int                   `json:"successful"`
-    Errors      []domain.RecordError  `json:"errors"` // Per-record validation errors (not fatal)
+    BatchNumber int `json:"batch_number"`
+    Successful  int `json:"successful"`
+    Failed      int `json:"failed"`
 }
 
 type ImportResult struct {
-    TotalProcessed    int                   `json:"processed_records"`
-    TotalSuccessful   int                   `json:"successful_records"`
-    TotalErrors       int                   `json:"error_records"`
-    Errors            []domain.RecordError  `json:"errors"`
-    FailedBatches     []FailedBatch         `json:"failed_batches"` // Batches that failed completely
-}
-
-type FailedBatch struct {
-    BatchNumber    int    `json:"batch_number"`
-    RecordsInBatch int    `json:"records_in_batch"`
-    StartRow       int    `json:"start_row"`
-    EndRow         int    `json:"end_row"`
-    Reason         string `json:"error"`
+    TotalProcessed  int `json:"processed_records"`
+    TotalSuccessful int `json:"successful_records"`
+    TotalFailed     int `json:"failed_records"`
 }
 
 func (s *ImportService) ExecuteImport(ctx context.Context, job *domain.Job, records []domain.Record) (*ImportResult, error) {
     result := &ImportResult{}
-    var allErrors []domain.RecordError
-    var failedBatches []FailedBatch
     
     // Process in batches - each batch has its own transaction
     batches := s.splitIntoBatches(records, s.cfg.BatchSize)
@@ -626,29 +611,16 @@ func (s *ImportService) ExecuteImport(ctx context.Context, job *domain.Job, reco
         default:
         }
         
-        // Step 1: App-side validation (format, limits, business rules)
-        validRecords, validationErrors := s.filterValidRecords(batch)
-        allErrors = append(allErrors, validationErrors...)
-        
-        if len(validRecords) == 0 {
-            // All records in batch failed app-side validation
-            result.TotalProcessed += len(batch)
-            result.TotalErrors += len(validationErrors)
-            continue
-        }
-        
-        // Step 2: DB-side validation (UNIQUE, FK) - only for valid records
-        batchResult, err := s.processBatchWithTransaction(ctx, validRecords, batchNum)
+        // Process batch with its own transaction
+        batchResult, err := s.processBatchWithTransaction(ctx, batch, batchNum)
         if err != nil {
             // Batch failed - log error and CONTINUE with remaining batches
-            failedBatches = append(failedBatches, FailedBatch{
-                BatchNumber: batchNum + 1,
-                StartRow:    batchNum*s.cfg.BatchSize + 1,
-                EndRow:      batchNum*s.cfg.BatchSize + len(batch),
-                Reason:      err.Error(),
-            })
+            s.logger.Error("batch failed",
+                slog.Int("batch_number", batchNum+1),
+                slog.String("error", err.Error()),
+            )
             result.TotalProcessed += len(batch)
-            result.TotalErrors += len(validationErrors)
+            result.TotalFailed += len(batch)
             
             // Continue processing remaining batches
             continue
@@ -657,18 +629,14 @@ func (s *ImportService) ExecuteImport(ctx context.Context, job *domain.Job, reco
         // Aggregate results
         result.TotalProcessed += len(batch)
         result.TotalSuccessful += batchResult.Successful
-        result.TotalErrors += len(validationErrors) + len(batchResult.Errors)
-        allErrors = append(allErrors, batchResult.Errors...)
+        result.TotalFailed += batchResult.Failed
         
         // Update progress
         s.updateJobProgress(ctx, job, result.TotalProcessed, result.TotalSuccessful)
     }
     
-    result.Errors = allErrors
-    result.FailedBatches = failedBatches
-    
-    // Determine final status based on errors
-    if len(failedBatches) > 0 || result.TotalErrors > 0 {
+    // Determine final status based on failures
+    if result.TotalFailed > 0 {
         s.updateJobCompletedWithErrors(ctx, job, result)
     } else {
         s.updateJobCompleted(ctx, job, result)
@@ -1044,6 +1012,82 @@ func main() {
 }
 ```
 
+### Shutdown Behavior
+
+When the server receives a termination signal (SIGINT/SIGTERM), shutdown is handled as follows:
+
+1. **Services are closed first** - `Close()` is called on ImportService and ExportService
+2. **Workers abort immediately** - The `stopChan` is closed, signaling all workers to exit
+3. **Job queues are closed** - Pending jobs in the queue are discarded
+4. **HTTP server shuts down** - A 5-second timeout is given for in-flight requests
+
+```go
+// Shutdown sequence
+importSvc.Close()  // Aborts workers, closes job queue
+exportSvc.Close()  // Aborts workers, closes job queue
+
+ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+defer cancel()
+server.Shutdown(ctx)  // Allow in-flight requests to complete
+```
+
+This ensures a fast shutdown - workers don't wait for queue to drain.
+
+---
+
+## Request Tracing
+
+All requests are traced using the `X-Request-ID` header for debugging and correlation.
+
+### Middleware Implementation
+
+```go
+// internal/middleware/request_id.go
+
+const RequestIDHeader = "X-Request-ID"
+const RequestIDKey = "request_id"
+
+func RequestIDMiddleware() gin.HandlerFunc {
+    return func(c *gin.Context) {
+        requestID := c.GetHeader(RequestIDHeader)
+        if requestID == "" {
+            requestID = uuid.New().String()
+        }
+        c.Set(RequestIDKey, requestID)
+        c.Header(RequestIDHeader, requestID)
+        c.Next()
+    }
+}
+
+func GetRequestID(c *gin.Context) string {
+    if id, exists := c.Get(RequestIDKey); exists {
+        return id.(string)
+    }
+    return ""
+}
+```
+
+### Request ID in Async Jobs
+
+For async import/export jobs, the request ID is captured at job creation and logged throughout the job lifecycle:
+
+```go
+// Handler captures request ID
+requestID := middleware.GetRequestID(c)
+
+// Service stores it with the task
+task := importTask{
+    jobID:     jobID,
+    requestID: requestID,
+    // ...
+}
+
+// Worker logs with request ID prefix
+log.Printf("[request_id=%s][job_id=%s] processing import...", task.requestID, task.jobID)
+```
+
+This enables end-to-end tracing from the initial HTTP request through async job processing.
+
 ---
 
 ## Observability Logging
@@ -1061,17 +1105,16 @@ type ImportMetrics struct {
     Mode              string        `json:"mode"`  // "insert" or "upsert"
     TotalRecords      int           `json:"total_records"`
     SuccessfulRecords int           `json:"successful_records"`
-    ErrorRecords      int           `json:"error_records"`
+    FailedRecords     int           `json:"failed_records"`
     DurationMs        int64         `json:"duration_ms"`
     RowsPerSecond     float64       `json:"rows_per_sec"`
     ErrorRate         float64       `json:"error_rate"`
     BatchCount        int           `json:"batch_count"`
-    FailedBatches     int           `json:"failed_batches"`
 }
 
 func (s *ImportService) logImportMetrics(job *domain.Job, result *ImportResult, duration time.Duration) {
     rowsPerSec := float64(result.TotalProcessed) / duration.Seconds()
-    errorRate := float64(result.TotalErrors) / float64(result.TotalProcessed)
+    errorRate := float64(result.TotalFailed) / float64(result.TotalProcessed)
     
     metrics := ImportMetrics{
         JobID:             job.ID.String(),
@@ -1079,12 +1122,11 @@ func (s *ImportService) logImportMetrics(job *domain.Job, result *ImportResult, 
         Mode:              job.Mode,
         TotalRecords:      result.TotalProcessed,
         SuccessfulRecords: result.TotalSuccessful,
-        ErrorRecords:      result.TotalErrors,
+        FailedRecords:     result.TotalFailed,
         DurationMs:        duration.Milliseconds(),
         RowsPerSecond:     rowsPerSec,
         ErrorRate:         errorRate,
-        BatchCount:        len(result.FailedBatches) + (result.TotalProcessed / s.cfg.BatchSize),
-        FailedBatches:     len(result.FailedBatches),
+        BatchCount:        result.TotalProcessed / s.cfg.BatchSize,
     }
     
     // Structured log for monitoring/alerting
@@ -1094,11 +1136,10 @@ func (s *ImportService) logImportMetrics(job *domain.Job, result *ImportResult, 
         slog.String("mode", metrics.Mode),
         slog.Int("total_records", metrics.TotalRecords),
         slog.Int("successful_records", metrics.SuccessfulRecords),
-        slog.Int("error_records", metrics.ErrorRecords),
-        slog.Int64("duration_ms", int64(metrics.Duration)),
+        slog.Int("failed_records", metrics.FailedRecords),
+        slog.Int64("duration_ms", metrics.DurationMs),
         slog.Float64("rows_per_sec", metrics.RowsPerSecond),
         slog.Float64("error_rate", metrics.ErrorRate),
-        slog.Int("failed_batches", metrics.FailedBatches),
     )
     
     // Alert on high error rate
@@ -1115,14 +1156,14 @@ func (s *ImportService) logImportMetrics(job *domain.Job, result *ImportResult, 
 
 ```go
 func (s *ImportService) logBatchProgress(job *domain.Job, batchNum int, totalBatches int, batchResult *BatchResult, batchDuration time.Duration) {
-    batchRowsPerSec := float64(batchResult.Successful+len(batchResult.Errors)) / batchDuration.Seconds()
+    batchRowsPerSec := float64(batchResult.Successful+batchResult.Failed) / batchDuration.Seconds()
     
     s.logger.Debug("batch completed",
         slog.String("job_id", job.ID.String()),
         slog.Int("batch_number", batchNum+1),
         slog.Int("total_batches", totalBatches),
         slog.Int("successful_records", batchResult.Successful),
-        slog.Int("error_records", len(batchResult.Errors)),
+        slog.Int("failed_records", batchResult.Failed),
         slog.Float64("rows_per_sec", batchRowsPerSec),
     )
 }
@@ -1138,10 +1179,9 @@ type ExportMetrics struct {
     TotalRecords  int     `json:"total_records"`
     DurationMs    int64   `json:"duration_ms"`
     RowsPerSecond float64 `json:"rows_per_sec"`
-    FileSizeBytes int64   `json:"file_size_bytes"`
 }
 
-func (s *ExportService) logExportMetrics(job *domain.Job, totalRecords int, fileSize int64, duration time.Duration) {
+func (s *ExportService) logExportMetrics(job *domain.Job, totalRecords int, duration time.Duration) {
     rowsPerSec := float64(totalRecords) / duration.Seconds()
     
     s.logger.Info("export completed",
@@ -1151,7 +1191,6 @@ func (s *ExportService) logExportMetrics(job *domain.Job, totalRecords int, file
         slog.Int("total_records", totalRecords),
         slog.Int64("duration_ms", duration.Milliseconds()),
         slog.Float64("rows_per_sec", rowsPerSec),
-        slog.Int64("file_size_bytes", fileSize),
     )
 }
 ```
@@ -1168,11 +1207,10 @@ func (s *ExportService) logExportMetrics(job *domain.Job, totalRecords int, file
   "mode": "insert",
   "total_records": 100000,
   "successful_records": 99850,
-  "error_records": 150,
+  "failed_records": 150,
   "duration_ms": 12500,
   "rows_per_sec": 8000.0,
-  "error_rate": 0.0015,
-  "failed_batches": 0
+  "error_rate": 0.0015
 }
 ```
 

@@ -19,22 +19,21 @@ The database uses PostgreSQL 15 with constraints for data validation. Failed rec
 │ active            │       │ processed_records │
 │ created_at        │       │ successful_records│
 │ updated_at        │       │ error_records     │
-└─────────┬─────────┘       │ errors (JSONB)    │
-          │                 │ failed_batches    │
-          │                 │ failure_reason    │
-          │ author_id       │ idempotency_key   │
-          │                 │ started_at        │
-          ▼                 │ completed_at      │
-┌───────────────────┐       └───────────────────┘
-│     articles      │       ┌───────────────────┐
+└─────────┬─────────┘       │ failure_reason    │
+          │                 │ idempotency_key   │
+          │ author_id       │ started_at        │
+          │                 │ completed_at      │
+          ▼                 └───────────────────┘
+┌───────────────────┐       ┌───────────────────┐
+│     articles      │       │   export_jobs     │
 ├───────────────────┤       ├───────────────────┤
 │ id (PK)           │       │ id (PK)           │
 │ slug (UNIQUE)     │       │ resource_type     │
 │ title             │       │ format            │
 │ description       │       │ status            │
-│ body              │       │ filters (JSONB)   │
+│ body              │       │ total_records     │
 │ author_id (FK)────┼───────│ file_path         │
-│ tags (TEXT[])     │       │ download_url      │
+│ tags (TEXT[])     │       │ idempotency_key   │
 │ published_at      │       │ started_at        │
 │ status            │       │ completed_at      │
 │ created_at        │       └───────────────────┘
@@ -142,8 +141,6 @@ CREATE TABLE import_jobs (
     processed_records INTEGER NOT NULL DEFAULT 0,
     successful_records INTEGER NOT NULL DEFAULT 0,
     error_records INTEGER NOT NULL DEFAULT 0,
-    errors JSONB DEFAULT '[]'::jsonb,       -- Per-record validation errors
-    failed_batches JSONB DEFAULT '[]'::jsonb, -- Array of {batch_number, records_in_batch, error}
     failure_reason TEXT,                    -- Why the import failed (if status=failed)
     idempotency_key VARCHAR(255),
     file_path TEXT,
@@ -167,7 +164,6 @@ CREATE TABLE export_jobs (
     filters JSONB DEFAULT '{}'::jsonb,
     fields TEXT[],
     file_path TEXT,
-    file_size_bytes BIGINT,                 -- Size of generated file
     download_url TEXT,
     record_count INTEGER,
     failure_reason TEXT,                    -- Why the export failed (if status=failed)
