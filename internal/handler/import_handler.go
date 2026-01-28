@@ -13,11 +13,11 @@ import (
 
 // ImportHandler handles import-related HTTP requests.
 type ImportHandler struct {
-	importService *service.ImportService
+	importService service.ImportServiceInterface
 }
 
 // NewImportHandler creates a new ImportHandler.
-func NewImportHandler(importService *service.ImportService) *ImportHandler {
+func NewImportHandler(importService service.ImportServiceInterface) *ImportHandler {
 	return &ImportHandler{
 		importService: importService,
 	}
@@ -123,23 +123,4 @@ func (h *ImportHandler) GetImport(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, toImportJobResponse(job))
-}
-
-// ListImports handles GET /api/v1/imports
-func (h *ImportHandler) ListImports(c *gin.Context) {
-	jobs, err := h.importService.ListImportJobs(c.Request.Context())
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-
-	items := make([]ImportJobResponse, len(jobs))
-	for i := range jobs {
-		items[i] = toImportJobResponse(&jobs[i])
-	}
-
-	c.JSON(http.StatusOK, gin.H{
-		"items": items,
-		"total": len(items),
-	})
 }

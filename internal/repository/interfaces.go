@@ -30,7 +30,6 @@ type ImportJobRepository interface {
 	GetImportJob(ctx context.Context, id string) (*domain.ImportJob, error)
 	GetImportJobByIdempotencyToken(ctx context.Context, token string) (*domain.ImportJob, error)
 	UpdateImportJob(ctx context.Context, job *domain.ImportJob) error
-	ListImportJobs(ctx context.Context) ([]domain.ImportJob, error)
 }
 
 // ExportJobRepository defines methods for export job data access.
@@ -39,7 +38,6 @@ type ExportJobRepository interface {
 	GetExportJob(ctx context.Context, id string) (*domain.ExportJob, error)
 	GetExportJobByIdempotencyToken(ctx context.Context, token string) (*domain.ExportJob, error)
 	UpdateExportJob(ctx context.Context, job *domain.ExportJob) error
-	ListExportJobs(ctx context.Context) ([]domain.ExportJob, error)
 }
 
 // JobRepository combines all job-related repository interfaces.

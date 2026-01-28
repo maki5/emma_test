@@ -186,7 +186,6 @@ type ExportJob struct {
     Fields         []string   `json:"fields,omitempty"`
     RecordCount    int        `json:"record_count,omitempty"`
     FilePath       string     `json:"file_path,omitempty"`
-    DownloadURL    string     `json:"download_url,omitempty"`
     FailureReason  string     `json:"failure_reason,omitempty"`
     StartedAt      *time.Time `json:"started_at,omitempty"`
     CompletedAt    *time.Time `json:"completed_at,omitempty"`
@@ -990,16 +989,12 @@ func main() {
     {
         // Import endpoints
         v1.POST("/imports", importHandler.Create)
-        v1.GET("/imports", importHandler.List)
         v1.GET("/imports/:id", importHandler.GetStatus)
-        v1.POST("/imports/:id/cancel", importHandler.Cancel)
         
         // Export endpoints
         v1.GET("/exports", exportHandler.StreamExport)
         v1.POST("/exports", exportHandler.CreateAsyncExport)
         v1.GET("/exports/:id", exportHandler.GetStatus)
-        v1.GET("/exports/:id/download", exportHandler.Download)
-        v1.POST("/exports/:id/cancel", exportHandler.Cancel)
     }
     
     // Health check endpoint (outside /v1 group)

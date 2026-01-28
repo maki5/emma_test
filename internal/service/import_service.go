@@ -553,8 +553,3 @@ func (s *ImportService) processBatchComments(ctx context.Context, job *domain.Im
 func (s *ImportService) GetImportJob(ctx context.Context, id string) (*domain.ImportJob, error) {
 	return s.jobRepo.GetImportJob(ctx, id)
 }
-
-// ListImportJobs lists all import jobs.
-func (s *ImportService) ListImportJobs(ctx context.Context) ([]domain.ImportJob, error) {
-	return s.jobRepo.ListImportJobs(ctx)
-}

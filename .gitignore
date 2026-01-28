@@ -40,5 +40,5 @@ vendor/
 # Air (hot reload)
 tmp/
 
-# Docker
-.docker/
+
+internal/mocks/

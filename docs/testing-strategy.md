@@ -886,14 +886,9 @@ sleep 5
 echo "Status:"
 curl -s "${BASE_URL}/v1/exports/${JOB_ID}" | jq '.'
 
-# Test 5: Download Async Export
+# Test 5: Invalid Resource
 echo ""
-echo "Test 5: Download Async Export (first 5 lines)"
-curl -s "${BASE_URL}/v1/exports/${JOB_ID}/download" | head -5
-
-# Test 6: Invalid Resource
-echo ""
-echo "Test 6: Invalid Resource (should fail)"
+echo "Test 5: Invalid Resource (should fail)"
 curl -s "${BASE_URL}/v1/exports?resource=invalid" | jq '.'
 
 echo ""

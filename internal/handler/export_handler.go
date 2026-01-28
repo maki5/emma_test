@@ -1,8 +1,8 @@
 package handler
 
 import (
+	"log"
 	"net/http"
-	"path/filepath"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -14,11 +14,11 @@ import (
 
 // ExportHandler handles export-related HTTP requests.
 type ExportHandler struct {
-	exportService *service.ExportService
+	exportService service.ExportServiceInterface
 }
 
 // NewExportHandler creates a new ExportHandler.
-func NewExportHandler(exportService *service.ExportService) *ExportHandler {
+func NewExportHandler(exportService service.ExportServiceInterface) *ExportHandler {
 	return &ExportHandler{
 		exportService: exportService,
 	}
@@ -38,8 +38,8 @@ type ExportJobResponse struct {
 	Format       string  `json:"format"`
 	Status       string  `json:"status"`
 	TotalRecords int     `json:"total_records"`
+	FilePath     string  `json:"file_path,omitempty"`
 	ErrorMessage *string `json:"error_message,omitempty"`
-	DownloadURL  *string `json:"download_url,omitempty"`
 	CreatedAt    string  `json:"created_at"`
 	UpdatedAt    string  `json:"updated_at"`
 	CompletedAt  *string `json:"completed_at,omitempty"`
@@ -53,6 +53,7 @@ func toExportJobResponse(job *domain.ExportJob) ExportJobResponse {
 		Format:       job.Format,
 		Status:       string(job.Status),
 		TotalRecords: job.TotalRecords,
+		FilePath:     job.FilePath,
 		ErrorMessage: job.ErrorMessage,
 		CreatedAt:    job.CreatedAt.Format(TimeFormat),
 		UpdatedAt:    job.UpdatedAt.Format(TimeFormat),
@@ -60,10 +61,6 @@ func toExportJobResponse(job *domain.ExportJob) ExportJobResponse {
 	if job.CompletedAt != nil {
 		completedAt := job.CompletedAt.Format(TimeFormat)
 		response.CompletedAt = &completedAt
-	}
-	if job.FilePath != "" {
-		downloadURL := "/api/v1/exports/" + job.ID + "/download"
-		response.DownloadURL = &downloadURL
 	}
 	return response
 }
@@ -119,41 +116,78 @@ func (h *ExportHandler) GetExport(c *gin.Context) {
 	c.JSON(http.StatusOK, toExportJobResponse(job))
 }
 
-// ListExports handles GET /api/v1/exports
-func (h *ExportHandler) ListExports(c *gin.Context) {
-	jobs, err := h.exportService.ListExportJobs(c.Request.Context())
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-
-	items := make([]ExportJobResponse, len(jobs))
-	for i := range jobs {
-		items[i] = toExportJobResponse(&jobs[i])
-	}
-
-	c.JSON(http.StatusOK, gin.H{
-		"items": items,
-		"total": len(items),
-	})
+// StreamExportRequest represents query parameters for streaming export.
+type StreamExportRequest struct {
+	Resource string `form:"resource" binding:"required,oneof=users articles comments"`
+	Format   string `form:"format" binding:"omitempty,oneof=csv ndjson"`
 }
 
-// DownloadExport handles GET /api/v1/exports/:id/download
-func (h *ExportHandler) DownloadExport(c *gin.Context) {
-	id := c.Param("id")
+// ginStreamWriter wraps gin.ResponseWriter for streaming.
+type ginStreamWriter struct {
+	writer gin.ResponseWriter
+}
 
-	// Validate that the ID is a valid UUID
-	if _, err := uuid.Parse(id); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "id must be a valid UUID"})
+func (w *ginStreamWriter) Write(data []byte) error {
+	_, err := w.writer.Write(data)
+	return err
+}
+
+func (w *ginStreamWriter) Flush() {
+	w.writer.Flush()
+}
+
+// StreamExport handles GET /api/v1/exports?resource=...&format=...
+func (h *ExportHandler) StreamExport(c *gin.Context) {
+	var req StreamExportRequest
+	if err := c.ShouldBindQuery(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
-	filePath, err := h.exportService.GetExportFilePath(c.Request.Context(), id)
+	// Default format is ndjson
+	if req.Format == "" {
+		req.Format = "ndjson"
+	}
+
+	requestID := middleware.GetRequestID(c)
+	log.Printf("[request_id=%s] Streaming export: resource=%s, format=%s", requestID, req.Resource, req.Format)
+
+	// Set appropriate content type
+	contentType := "application/x-ndjson"
+	if req.Format == "csv" {
+		contentType = "text/csv"
+	}
+
+	c.Header("Content-Type", contentType)
+	c.Header("Transfer-Encoding", "chunked")
+	c.Header("X-Content-Type-Options", "nosniff")
+
+	// Set filename for download
+	filename := req.Resource + "." + req.Format
+	c.Header("Content-Disposition", "attachment; filename=\""+filename+"\"")
+
+	writer := &ginStreamWriter{writer: c.Writer}
+
+	var count int
+	var err error
+
+	switch req.Resource {
+	case "users":
+		count, err = h.exportService.StreamUsers(c.Request.Context(), req.Format, writer)
+	case "articles":
+		count, err = h.exportService.StreamArticles(c.Request.Context(), req.Format, writer)
+	case "comments":
+		count, err = h.exportService.StreamComments(c.Request.Context(), req.Format, writer)
+	default:
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid resource type"})
+		return
+	}
+
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+		log.Printf("[request_id=%s] Streaming export error: %v", requestID, err)
+		// Can't return error at this point as we've started writing
 		return
 	}
 
-	filename := filepath.Base(filePath)
-	c.FileAttachment(filePath, filename)
+	log.Printf("[request_id=%s] Streaming export completed: resource=%s, count=%d", requestID, req.Resource, count)
 }

@@ -395,28 +395,139 @@ func (s *ExportService) GetExportJob(ctx context.Context, id string) (*domain.Ex
 	return s.jobRepo.GetExportJob(ctx, id)
 }
 
-// ListExportJobs lists all export jobs.
-func (s *ExportService) ListExportJobs(ctx context.Context) ([]domain.ExportJob, error) {
-	return s.jobRepo.ListExportJobs(ctx)
+// StreamUsers streams users directly to the writer in the specified format.
+func (s *ExportService) StreamUsers(ctx context.Context, format string, writer StreamWriter) (int, error) {
+	var count int
+
+	if format == "csv" {
+		// Write CSV header
+		if err := writer.Write([]byte("id,email,name,role,is_active,created_at,updated_at\n")); err != nil {
+			return 0, fmt.Errorf("write header: %w", err)
+		}
+
+		err := s.userRepo.StreamAll(ctx, func(user domain.User) error {
+			line := fmt.Sprintf("%s,%s,%s,%s,%v,%s,%s\n",
+				user.ID, user.Email, user.Name, user.Role, user.Active,
+				user.CreatedAt.Format(time.RFC3339), user.UpdatedAt.Format(time.RFC3339))
+			if err := writer.Write([]byte(line)); err != nil {
+				return fmt.Errorf("write row: %w", err)
+			}
+			count++
+			return nil
+		})
+		if err != nil {
+			return count, fmt.Errorf("stream users: %w", err)
+		}
+	} else {
+		err := s.userRepo.StreamAll(ctx, func(user domain.User) error {
+			data, err := json.Marshal(user)
+			if err != nil {
+				return fmt.Errorf("marshal user: %w", err)
+			}
+			if err := writer.Write(append(data, '\n')); err != nil {
+				return fmt.Errorf("write json: %w", err)
+			}
+			count++
+			return nil
+		})
+		if err != nil {
+			return count, fmt.Errorf("stream users: %w", err)
+		}
+	}
+
+	writer.Flush()
+	return count, nil
 }
 
-// GetExportFilePath returns the file path for a completed export job.
-func (s *ExportService) GetExportFilePath(ctx context.Context, id string) (string, error) {
-	job, err := s.jobRepo.GetExportJob(ctx, id)
-	if err != nil {
-		return "", err
-	}
-	if job == nil {
-		return "", fmt.Errorf("export job not found")
+// StreamArticles streams articles directly to the writer in the specified format.
+func (s *ExportService) StreamArticles(ctx context.Context, format string, writer StreamWriter) (int, error) {
+	var count int
+
+	if format == "csv" {
+		// Write CSV header
+		if err := writer.Write([]byte("id,title,slug,body,author_id,status,published_at,created_at,updated_at\n")); err != nil {
+			return 0, fmt.Errorf("write header: %w", err)
+		}
+
+		err := s.articleRepo.StreamAll(ctx, func(article domain.Article) error {
+			publishedAt := ""
+			if article.PublishedAt != nil {
+				publishedAt = article.PublishedAt.Format(time.RFC3339)
+			}
+			line := fmt.Sprintf("%s,%s,%s,%s,%s,%s,%s,%s,%s\n",
+				article.ID, article.Title, article.Slug, article.Body, article.AuthorID,
+				article.Status, publishedAt,
+				article.CreatedAt.Format(time.RFC3339), article.UpdatedAt.Format(time.RFC3339))
+			if err := writer.Write([]byte(line)); err != nil {
+				return fmt.Errorf("write row: %w", err)
+			}
+			count++
+			return nil
+		})
+		if err != nil {
+			return count, fmt.Errorf("stream articles: %w", err)
+		}
+	} else {
+		err := s.articleRepo.StreamAll(ctx, func(article domain.Article) error {
+			data, err := json.Marshal(article)
+			if err != nil {
+				return fmt.Errorf("marshal article: %w", err)
+			}
+			if err := writer.Write(append(data, '\n')); err != nil {
+				return fmt.Errorf("write json: %w", err)
+			}
+			count++
+			return nil
+		})
+		if err != nil {
+			return count, fmt.Errorf("stream articles: %w", err)
+		}
 	}
 
-	if job.Status != domain.JobStatusCompleted {
-		return "", fmt.Errorf("export job not completed")
+	writer.Flush()
+	return count, nil
+}
+
+// StreamComments streams comments directly to the writer in the specified format.
+func (s *ExportService) StreamComments(ctx context.Context, format string, writer StreamWriter) (int, error) {
+	var count int
+
+	if format == "csv" {
+		// Write CSV header
+		if err := writer.Write([]byte("id,article_id,user_id,body,created_at\n")); err != nil {
+			return 0, fmt.Errorf("write header: %w", err)
+		}
+
+		err := s.commentRepo.StreamAll(ctx, func(comment domain.Comment) error {
+			line := fmt.Sprintf("%s,%s,%s,%s,%s\n",
+				comment.ID, comment.ArticleID, comment.UserID, comment.Body,
+				comment.CreatedAt.Format(time.RFC3339))
+			if err := writer.Write([]byte(line)); err != nil {
+				return fmt.Errorf("write row: %w", err)
+			}
+			count++
+			return nil
+		})
+		if err != nil {
+			return count, fmt.Errorf("stream comments: %w", err)
+		}
+	} else {
+		err := s.commentRepo.StreamAll(ctx, func(comment domain.Comment) error {
+			data, err := json.Marshal(comment)
+			if err != nil {
+				return fmt.Errorf("marshal comment: %w", err)
+			}
+			if err := writer.Write(append(data, '\n')); err != nil {
+				return fmt.Errorf("write json: %w", err)
+			}
+			count++
+			return nil
+		})
+		if err != nil {
+			return count, fmt.Errorf("stream comments: %w", err)
+		}
 	}
 
-	if job.FilePath == "" {
-		return "", fmt.Errorf("export file not available")
-	}
-
-	return job.FilePath, nil
+	writer.Flush()
+	return count, nil
 }

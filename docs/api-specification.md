@@ -276,80 +276,6 @@ GET /v1/imports/550e8400-e29b-41d4-a716-446655440000 HTTP/1.1
 
 ---
 
-### GET /v1/imports
-
-List all import jobs.
-
-**Request:**
-```http
-GET /v1/imports HTTP/1.1
-```
-
-**Response:**
-```json
-{
-    "items": [
-        {
-            "job_id": "550e8400-e29b-41d4-a716-446655440000",
-            "resource_type": "users",
-            "status": "processing",
-            "total_records": 10000,
-            "processed_records": 5500,
-            "started_at": "2024-01-15T10:30:00Z"
-        },
-        {
-            "job_id": "550e8400-e29b-41d4-a716-446655440001",
-            "resource_type": "articles",
-            "status": "pending",
-            "started_at": "2024-01-15T10:31:00Z"
-        }
-    ],
-    "total": 2
-}
-```
-
----
-
-### POST /v1/imports/:id/cancel
-
-Cancel a running import job. Only jobs with status `pending` or `processing` can be cancelled.
-
-**Request:**
-```http
-POST /v1/imports/550e8400-e29b-41d4-a716-446655440000/cancel HTTP/1.1
-```
-
-**Response (Success):**
-```json
-{
-    "job_id": "550e8400-e29b-41d4-a716-446655440000",
-    "status": "cancelled",
-    "message": "Import job cancelled successfully",
-    "processed_records": 5500,
-    "successful_records": 5485,
-    "error_records": 15,
-    "cancelled_at": "2024-01-15T10:32:00Z"
-}
-```
-
-**Response (Cannot Cancel - Already Completed):**
-```json
-{
-    "error": "invalid_state",
-    "message": "Cannot cancel job with status 'completed'",
-    "job_id": "550e8400-e29b-41d4-a716-446655440000",
-    "current_status": "completed"
-}
-```
-
-**Cancellation Behavior:**
-- The current batch will complete (transactions are atomic per batch)
-- Remaining batches will be skipped
-- Already inserted records remain in the database
-- Job status changes to `cancelled`
-
----
-
 ## Export Endpoints
 
 ### GET /v1/exports (Streaming)
@@ -366,8 +292,6 @@ GET /v1/exports?resource=users&format=ndjson HTTP/1.1
 |-----------|------|----------|-------------|
 | `resource` | string | Yes | Resource type: `users`, `articles`, `comments` |
 | `format` | string | No | Output format: `ndjson` (default), `csv` |
-| `fields` | string | No | Comma-separated list of fields to include |
-| `filter[field]` | string | No | Filter by field value |
 
 **Response:**
 ```http
@@ -393,35 +317,35 @@ POST /v1/exports HTTP/1.1
 Content-Type: application/json
 
 {
-    "resource": "users",
+    "resource_type": "users",
     "format": "ndjson",
-    "filters": {
-        "role": "admin"
-    },
-    "fields": ["id", "email", "name", "role"]
+    "idempotency_token": "550e8400-e29b-41d4-a716-446655440001"
 }
 ```
 
 **Body Fields:**
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `resource` | string | Yes | Resource type: `users`, `articles`, `comments` |
-| `format` | string | No | Output format: `ndjson` (default), `csv`, `json` |
-| `filters` | object | No | Key-value pairs for filtering |
-| `fields` | array | No | List of fields to include |
+| `resource_type` | string | Yes | Resource type: `users`, `articles`, `comments` |
+| `format` | string | Yes | Output format: `ndjson`, `csv` |
+| `idempotency_token` | string | Yes | UUID for idempotency |
 
 **Response:**
 ```json
 {
-    "job_id": "550e8400-e29b-41d4-a716-446655440100",
+    "id": "550e8400-e29b-41d4-a716-446655440100",
+    "resource_type": "users",
+    "format": "ndjson",
     "status": "pending",
-    "message": "Export job created successfully"
+    "total_records": 0,
+    "created_at": "2024-01-15T10:35:00Z",
+    "updated_at": "2024-01-15T10:35:00Z"
 }
 ```
 
 ---
 
-### GET /v1/exports/:id
+### GET /v1/exports/{job_id}
 
 Get the status of an async export job.
 
@@ -450,7 +374,6 @@ GET /v1/exports/550e8400-e29b-41d4-a716-446655440100 HTTP/1.1
     "status": "completed",
     "record_count": 150,
     "file_path": "./exports/users-export-2024-01-15-550e8400.ndjson",
-    "download_url": "/v1/exports/550e8400-e29b-41d4-a716-446655440100/download",
     "started_at": "2024-01-15T10:35:00Z",
     "completed_at": "2024-01-15T10:35:02Z"
 }
@@ -472,49 +395,6 @@ GET /v1/exports/550e8400-e29b-41d4-a716-446655440100 HTTP/1.1
 > **Note**: When export fails, no partial file is left behind - it is cleaned up automatically.
 
 > **Note**: Export files are stored at `EXPORT_FILE_PATH` (default: `./exports`) and are retained permanently.
-
----
-
-### POST /v1/exports/:id/cancel
-
-Cancel a running async export job.
-
-**Request:**
-```http
-POST /v1/exports/550e8400-e29b-41d4-a716-446655440100/cancel HTTP/1.1
-```
-
-**Response (Success):**
-```json
-{
-    "job_id": "550e8400-e29b-41d4-a716-446655440100",
-    "status": "cancelled",
-    "message": "Export job cancelled successfully",
-    "cancelled_at": "2024-01-15T10:35:30Z"
-}
-```
-
----
-
-### GET /v1/exports/:id/download
-
-Download the generated export file.
-
-**Request:**
-```http
-GET /v1/exports/550e8400-e29b-41d4-a716-446655440100/download HTTP/1.1
-```
-
-**Response:**
-```http
-HTTP/1.1 200 OK
-Content-Type: application/x-ndjson
-Content-Disposition: attachment; filename="users-export-2024-01-15.ndjson"
-
-{"id":"550e8400-e29b-41d4-a716-446655440000","email":"admin1@example.com","name":"Admin One","role":"admin"}
-{"id":"550e8400-e29b-41d4-a716-446655440001","email":"admin2@example.com","name":"Admin Two","role":"admin"}
-...
-```
 
 ---
 

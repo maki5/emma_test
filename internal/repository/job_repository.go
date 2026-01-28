@@ -152,45 +152,6 @@ func (r *PostgresJobRepository) UpdateImportJob(ctx context.Context, job *domain
 	return nil
 }
 
-// ListImportJobs lists all import jobs.
-func (r *PostgresJobRepository) ListImportJobs(ctx context.Context) ([]domain.ImportJob, error) {
-	rows, err := r.pool.Query(ctx, `
-		SELECT id, resource_type, status, total_records, processed_records,
-			success_count, failure_count, idempotency_token, metadata, error_message,
-			created_at, updated_at, completed_at
-		FROM import_jobs
-		ORDER BY created_at DESC
-	`)
-	if err != nil {
-		return nil, fmt.Errorf("list import jobs: %w", err)
-	}
-	defer rows.Close()
-
-	var jobs []domain.ImportJob
-	for rows.Next() {
-		var job domain.ImportJob
-		var metadata []byte
-		var completedAt *time.Time
-		var errorMsg *string
-
-		if err := rows.Scan(&job.ID, &job.ResourceType, &job.Status, &job.TotalRecords, &job.ProcessedRecords,
-			&job.SuccessCount, &job.FailureCount, &job.IdempotencyToken, &metadata, &errorMsg,
-			&job.CreatedAt, &job.UpdatedAt, &completedAt); err != nil {
-			return nil, fmt.Errorf("scan import job: %w", err)
-		}
-
-		if metadata != nil {
-			_ = json.Unmarshal(metadata, &job.Metadata)
-		}
-		job.CompletedAt = completedAt
-		job.ErrorMessage = errorMsg
-
-		jobs = append(jobs, job)
-	}
-
-	return jobs, rows.Err()
-}
-
 // CreateExportJob creates a new export job.
 func (r *PostgresJobRepository) CreateExportJob(ctx context.Context, job *domain.ExportJob) error {
 	_, err := r.pool.Exec(ctx, `
@@ -306,46 +267,4 @@ func (r *PostgresJobRepository) UpdateExportJob(ctx context.Context, job *domain
 	}
 
 	return nil
-}
-
-// ListExportJobs lists all export jobs.
-func (r *PostgresJobRepository) ListExportJobs(ctx context.Context) ([]domain.ExportJob, error) {
-	rows, err := r.pool.Query(ctx, `
-		SELECT id, resource_type, format, status, total_records,
-			file_path, idempotency_token, error_message,
-			created_at, updated_at, completed_at
-		FROM export_jobs
-		ORDER BY created_at DESC
-	`)
-	if err != nil {
-		return nil, fmt.Errorf("list export jobs: %w", err)
-	}
-	defer rows.Close()
-
-	var jobs []domain.ExportJob
-	for rows.Next() {
-		var job domain.ExportJob
-		var completedAt *time.Time
-		var errorMsg *string
-		var filePath, format *string
-
-		if err := rows.Scan(&job.ID, &job.ResourceType, &format, &job.Status, &job.TotalRecords,
-			&filePath, &job.IdempotencyToken, &errorMsg,
-			&job.CreatedAt, &job.UpdatedAt, &completedAt); err != nil {
-			return nil, fmt.Errorf("scan export job: %w", err)
-		}
-
-		if filePath != nil {
-			job.FilePath = *filePath
-		}
-		if format != nil {
-			job.Format = *format
-		}
-		job.CompletedAt = completedAt
-		job.ErrorMessage = errorMsg
-
-		jobs = append(jobs, job)
-	}
-
-	return jobs, rows.Err()
 }

@@ -1,0 +1,18 @@
+with-expecter: true
+packages:
+  bulk-import-export/internal/repository:
+    config:
+      dir: "{{.InterfaceDir}}/../mocks"
+      outpkg: mocks
+    interfaces:
+      UserRepository:
+      ArticleRepository:
+      CommentRepository:
+      JobRepository:
+  bulk-import-export/internal/service:
+    config:
+      dir: "{{.InterfaceDir}}/../mocks"
+      outpkg: mocks
+    interfaces:
+      ExportServiceInterface:
+      ImportServiceInterface:
