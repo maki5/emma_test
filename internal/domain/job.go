@@ -83,13 +83,3 @@ func IsValidResourceType(resourceType string) bool {
 	}
 	return false
 }
-
-// IsValidFormat checks if an export format is valid.
-func IsValidFormat(format string) bool {
-	for _, f := range ValidFormats {
-		if f == format {
-			return true
-		}
-	}
-	return false
-}

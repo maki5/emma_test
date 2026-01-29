@@ -26,28 +26,6 @@ func TestIsValidResourceType(t *testing.T) {
 	}
 }
 
-func TestIsValidFormat(t *testing.T) {
-	tests := []struct {
-		format string
-		valid  bool
-	}{
-		{"csv", true},
-		{"ndjson", true},
-		{"invalid", false},
-		{"", false},
-		{"CSV", false},
-		{"json", false},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.format, func(t *testing.T) {
-			if got := IsValidFormat(tt.format); got != tt.valid {
-				t.Errorf("IsValidFormat(%q) = %v, want %v", tt.format, got, tt.valid)
-			}
-		})
-	}
-}
-
 func TestValidRoles(t *testing.T) {
 	expectedRoles := []string{"admin", "user", "moderator"}
 

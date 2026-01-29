@@ -289,33 +289,3 @@ func TestValidateComment(t *testing.T) {
 		})
 	}
 }
-
-func TestConvertValidationErrors(t *testing.T) {
-	v := NewValidator()
-
-	user := &domain.User{
-		ID: "123",
-	}
-
-	err := v.ValidateUser(user)
-	if err == nil {
-		t.Fatal("expected validation error")
-	}
-
-	errors := ConvertValidationErrors(1, err)
-	if len(errors) == 0 {
-		t.Error("expected at least one error")
-	}
-
-	for _, e := range errors {
-		if e.Row != 1 {
-			t.Errorf("expected row 1, got %d", e.Row)
-		}
-		if e.Field == "" {
-			t.Error("expected field to be set")
-		}
-		if e.Reason == "" {
-			t.Error("expected reason to be set")
-		}
-	}
-}

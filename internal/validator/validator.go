@@ -160,31 +160,7 @@ func wordCountRule(maxWords int) validation.RuleFunc {
 	}
 }
 
-// ConvertValidationErrors converts ozzo validation errors to domain RecordErrors.
-func ConvertValidationErrors(rowNum int, err error) []domain.RecordError {
-	var errors []domain.RecordError
-
-	if ve, ok := err.(validation.Errors); ok {
-		for field, fieldErr := range ve {
-			errors = append(errors, domain.RecordError{
-				Row:    rowNum,
-				Field:  field,
-				Reason: fieldErr.Error(),
-			})
-		}
-	} else if err != nil {
-		errors = append(errors, domain.RecordError{
-			Row:    rowNum,
-			Field:  "unknown",
-			Reason: err.Error(),
-		})
-	}
-
-	return errors
-}
-
 // AppendValidationErrors appends validation errors directly to the target slice.
-// This is more efficient than ConvertValidationErrors as it avoids slice spread copies.
 func AppendValidationErrors(target *[]domain.RecordError, rowNum int, err error) {
 	if ve, ok := err.(validation.Errors); ok {
 		for field, fieldErr := range ve {

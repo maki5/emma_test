@@ -1,21 +1,16 @@
-# Bulk Import/Export System - Implementation Plan
+# Bulk Import/Export System
 
 ## Overview
 
-A bulk data import/export system built with Go and Gin framework. Handles users, articles, and comments with async imports, streaming/async exports, and per-record error tracking.
+A high-performance bulk data import/export system built with Go and Gin framework. Handles users, articles, and comments with async imports, streaming/async exports, per-record error tracking, and Prometheus metrics.
 
 ---
 
-## Quick Links
+## Documentation
 
 | Document | Description |
 |----------|-------------|
-| [Architecture](./architecture.md) | 3-layer design with embedded worker pools |
-| [Database Schema](./database-schema.md) | Tables, constraints, and indexes |
-| [Validation Strategy](./validation-strategy.md) | CTE-based validation with database constraints |
-| [API Specification](./api-specification.md) | Import/Export endpoint details |
-| [Testing Strategy](./testing-strategy.md) | Bash scripts and test scenarios |
-| [Development Setup](./development-setup.md) | Docker Compose, Makefile, environment |
+| [API Specification](./api-specification.md) | Complete endpoint documentation with examples |
 
 ---
 
@@ -23,56 +18,113 @@ A bulk data import/export system built with Go and Gin framework. Handles users,
 
 | Category | Technology |
 |----------|------------|
-| **Language** | Go 1.23 |
-| **Framework** | Gin (based on [golang-gin-realworld-example-app](https://github.com/gothinkster/golang-gin-realworld-example-app)) |
-| **Database** | PostgreSQL 15 with pgx driver |
-| **Validation** | [ozzo-validation](https://github.com/go-ozzo/ozzo-validation) (no reflection, ~3.5x faster for bulk) |
-| **API Docs** | Swagger with gin-swagger |
-| **Monitoring** | Prometheus (Grafana optional) |
-| **Development** | Docker Compose (DB in container, app runs locally) |
+| Language | Go 1.24 |
+| Framework | Gin |
+| Database | PostgreSQL 15 (pgx driver) |
+| Validation | ozzo-validation |
+| Metrics | Prometheus + Grafana |
+| Testing | mockery + testcontainers |
 
 ---
 
-## Core Design Decisions
+## Architecture
 
-| Decision | Rationale |
-|----------|-----------|
-| **Single Binary** | Embedded worker pools via goroutines, no separate worker process |
-| **Worker Pool** | Configurable pool size (default: 4) for concurrent import/export processing |
-| **Mixed Validation** | App-side via ozzo-validation (fast-fail, rich errors); DB-side for UNIQUE/FK (atomic, race-safe) |
-| **CTE for DB Errors** | Failed records (duplicates, FK violations) tracked in same INSERT query |
-| **Streaming I/O** | O(1) memory for both imports (batch) and exports (cursor) |
-| **Batched Inserts** | 1000-record batches, each in own transaction for performance |
-| **Continue on Failure** | Failed batches logged, remaining batches continue processing |
-| **Error Aggregation** | All errors (app-side + DB-side + batch failures) collected in final response |
-| **Import Order** | users → articles → comments (respects FK dependencies) |
+**3-Layer Design:**
 
----
+| Layer | Components | Purpose |
+|-------|------------|---------|
+| Handler | Import, Export, Health handlers | HTTP request handling |
+| Service | ImportService, ExportService | Business logic, worker pools |
+| Repository | User, Article, Comment, Job repos | Database access |
 
-## Testing Strategy
-
-| Level | Tool | Purpose |
-|-------|------|---------|
-| **Unit Tests** | mockery | Handler/Service layer tests with mocks |
-| **Integration Tests** | testcontainers | Repository tests with real PostgreSQL |
-| **E2E Tests** | bash + curl | Full API testing with test data |
+**Key Patterns:**
+- Worker pools for controlled concurrency
+- Batch processing with per-batch transactions
+- CTE-based bulk inserts for conflict handling
+- Idempotency via unique tokens
+- Streaming exports with database cursors
 
 ---
 
-## Implementation Phases
+## Database Schema
 
-### Phase 1: Foundation (Days 1-2)
-- [ ] Project setup with Docker Compose (PostgreSQL + Prometheus)
-- [ ] Database migrations with constraints
-- [ ] Basic Gin server with Swagger docs
+| Table | Key Constraints |
+|-------|-----------------|
+| users | email UNIQUE |
+| articles | slug UNIQUE, author_id FK → users |
+| comments | article_id FK → articles, user_id FK → users |
+| import_jobs | idempotency_token UNIQUE |
+| export_jobs | idempotency_token UNIQUE |
 
-### Phase 2: Core Functionality (Days 3-4)
-- [ ] Import endpoints (multipart + remote URL)
-- [ ] Export endpoints (streaming + async)
-- [ ] CTE-based bulk insert with failed record tracking
-- [ ] Worker pool in service layer
+**Import order:** users → articles → comments (respects FK dependencies)
 
-### Phase 3: Testing (Days 5-6)
-- [ ] Bash test scripts for all endpoints
-- [ ] Performance validation with test data
-- [ ] Error handling and edge cases
+---
+
+## Validation
+
+| Layer | Validates | Purpose |
+|-------|-----------|---------|
+| App-side | Format, limits, enums | Fast-fail with rich errors |
+| DB-side | UNIQUE, FOREIGN KEY | Race condition safety |
+
+---
+
+## Metrics & Monitoring
+
+| Metric Type | Examples |
+|-------------|----------|
+| HTTP | Request count, latency (P50/P90/P99), in-flight |
+| Jobs | Completion rate, duration, in-progress count |
+| Records | Processed count, success/failure rate |
+| Database | Connection pool utilization |
+
+**Access:** Prometheus at `:9090`, Grafana at `:3000` with pre-configured dashboards.
+
+---
+
+## Testing
+
+| Level | Tool | Scope |
+|-------|------|-------|
+| Unit | mockery | Handler, Service layer |
+| Integration | testcontainers | Repository with real PostgreSQL |
+| E2E | curl scripts | Full API flows |
+
+---
+
+## Quick Start
+
+1. Start PostgreSQL: `make db-start`
+2. Run migrations: `make migrate-up`
+3. Start app: `make run`
+4. Access API at http://localhost:8080
+
+For monitoring: `make monitoring-start` (Prometheus + Grafana)
+
+---
+
+## API Endpoints
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/health` | Health check |
+| GET | `/ready` | Readiness probe |
+| GET | `/live` | Liveness probe |
+| GET | `/metrics` | Prometheus metrics |
+| POST | `/api/v1/imports` | Start import job |
+| GET | `/api/v1/imports/:id` | Get import status |
+| GET | `/api/v1/exports/:resource/stream` | Stream export |
+| POST | `/api/v1/exports` | Start async export |
+| GET | `/api/v1/exports/:id` | Get export status |
+
+---
+
+## Configuration
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| HTTP_PORT | 8080 | Server port |
+| DATABASE_URL | required | PostgreSQL URL |
+| WORKER_POOL_SIZE | 10 | Concurrent workers |
+| BATCH_SIZE | 1000 | Records per batch |
+| EXPORT_DIR | ./exports | Export file directory |

@@ -150,7 +150,7 @@ func TestImportHandler_CreateImport(t *testing.T) {
 		_ = writer.WriteField("resource_type", "users")
 		_ = writer.WriteField("idempotency_token", "not-a-uuid")
 		part, _ := writer.CreateFormFile("file", "users.csv")
-		part.Write([]byte("email,name,role\ntest@example.com,Test User,user"))
+		_, _ = part.Write([]byte("email,name,role\ntest@example.com,Test User,user"))
 		writer.Close()
 
 		req := httptest.NewRequest(http.MethodPost, "/api/v1/imports", body)
@@ -190,7 +190,7 @@ func TestImportHandler_CreateImport(t *testing.T) {
 		_ = writer.WriteField("resource_type", "users")
 		_ = writer.WriteField("idempotency_token", token)
 		part, _ := writer.CreateFormFile("file", "users.csv")
-		part.Write([]byte("email,name,role\ntest@example.com,Test User,user"))
+		_, _ = part.Write([]byte("email,name,role\ntest@example.com,Test User,user"))
 		writer.Close()
 
 		req := httptest.NewRequest(http.MethodPost, "/api/v1/imports", body)
@@ -226,7 +226,7 @@ func TestImportHandler_CreateImport(t *testing.T) {
 		writer := multipart.NewWriter(body)
 		_ = writer.WriteField("resource_type", "articles")
 		part, _ := writer.CreateFormFile("file", "articles.ndjson")
-		part.Write([]byte(`{"id":"123","slug":"test","title":"Test","body":"Body"}`))
+		_, _ = part.Write([]byte(`{"id":"123","slug":"test","title":"Test","body":"Body"}`))
 		writer.Close()
 
 		req := httptest.NewRequest(http.MethodPost, "/api/v1/imports", body)
@@ -262,7 +262,7 @@ func TestImportHandler_CreateImport(t *testing.T) {
 		writer := multipart.NewWriter(body)
 		_ = writer.WriteField("resource_type", "comments")
 		part, _ := writer.CreateFormFile("file", "comments.ndjson")
-		part.Write([]byte(`{"id":"cm_123","body":"Comment"}`))
+		_, _ = part.Write([]byte(`{"id":"cm_123","body":"Comment"}`))
 		writer.Close()
 
 		req := httptest.NewRequest(http.MethodPost, "/api/v1/imports", body)

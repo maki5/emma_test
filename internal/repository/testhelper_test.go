@@ -75,14 +75,14 @@ func SetupTestDB(t *testing.T) *TestDB {
 	// Create connection pool
 	pool, err := pgxpool.New(ctx, connStr)
 	if err != nil {
-		pgContainer.Terminate(ctx)
+		_ = pgContainer.Terminate(ctx)
 		t.Fatalf("Failed to create connection pool: %v", err)
 	}
 
 	// Verify connection
 	if err := pool.Ping(ctx); err != nil {
 		pool.Close()
-		pgContainer.Terminate(ctx)
+		_ = pgContainer.Terminate(ctx)
 		t.Fatalf("Failed to ping database: %v", err)
 	}
 

@@ -54,8 +54,3 @@ func NewPostgres(ctx context.Context, cfg PoolConfig) (*pgxpool.Pool, error) {
 
 	return pool, nil
 }
-
-// HealthCheck checks if the database connection is healthy.
-func HealthCheck(ctx context.Context, pool *pgxpool.Pool) error {
-	return pool.Ping(ctx)
-}

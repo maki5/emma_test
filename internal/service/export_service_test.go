@@ -673,7 +673,7 @@ func TestExportService_StreamComments(t *testing.T) {
 					UserID:    "user-1",
 					CreatedAt: now,
 				}
-				callback(comment)
+				_ = callback(comment)
 			}).
 			Return(nil)
 
@@ -887,7 +887,7 @@ func TestExportService_ProcessExport_Articles(t *testing.T) {
 			StreamAll(mock.Anything, mock.Anything).
 			Run(func(ctx context.Context, callback func(domain.Article) error) {
 				article := domain.Article{ID: uuid.New().String(), Slug: "test-article", Title: "Test", Body: "Body", AuthorID: uuid.New().String(), Status: "published", CreatedAt: now, UpdatedAt: now}
-				callback(article)
+				_ = callback(article)
 			}).
 			Return(nil)
 
@@ -1033,7 +1033,7 @@ func TestExportService_ProcessExport_Comments(t *testing.T) {
 			StreamAll(mock.Anything, mock.Anything).
 			Run(func(ctx context.Context, callback func(domain.Comment) error) {
 				comment := domain.Comment{ID: "comment-1", Body: "Test comment", ArticleID: uuid.New().String(), UserID: uuid.New().String(), CreatedAt: now}
-				callback(comment)
+				_ = callback(comment)
 			}).
 			Return(nil)
 
