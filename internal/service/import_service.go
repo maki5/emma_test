@@ -114,7 +114,7 @@ func (s *ImportService) Close() {
 	s.mu.Lock()
 	s.closed = true
 	s.mu.Unlock()
-	
+
 	close(s.stopChan)
 	close(s.jobQueue)
 	s.wg.Wait()
@@ -167,7 +167,7 @@ func (s *ImportService) StartImport(ctx context.Context, resourceType, idempoten
 		return nil, fmt.Errorf("import service is shutting down")
 	}
 	s.mu.RUnlock()
-	
+
 	select {
 	case s.jobQueue <- importTask{
 		job:       job,
@@ -185,7 +185,7 @@ func (s *ImportService) StartImport(ctx context.Context, resourceType, idempoten
 				return
 			}
 			s.mu.RUnlock()
-			
+
 			select {
 			case s.jobQueue <- importTask{
 				job:       job,
@@ -338,8 +338,8 @@ func (s *ImportService) importUsers(ctx context.Context, job *domain.ImportJob, 
 			if !lastProgressTime.IsZero() {
 				sinceLast = now.Sub(lastProgressTime)
 			}
-			log.Printf("[job_id=%s] Parsing progress: %d records parsed in %v (last 1000 in %v, validation=%v, db=%v)", 
-				job.ID, result.TotalRecords, time.Since(parseStart).Round(time.Millisecond), 
+			log.Printf("[job_id=%s] Parsing progress: %d records parsed in %v (last 1000 in %v, validation=%v, db=%v)",
+				job.ID, result.TotalRecords, time.Since(parseStart).Round(time.Millisecond),
 				sinceLast.Round(time.Millisecond), totalValidationTime.Round(time.Millisecond), totalDBTime.Round(time.Millisecond))
 			lastProgressTime = now
 		}
@@ -420,7 +420,7 @@ func (s *ImportService) processBatchUsers(ctx context.Context, job *domain.Impor
 	dbStart := time.Now()
 	batchResult := s.userRepo.BulkInsert(ctx, users)
 	dbDuration := time.Since(dbStart)
-	
+
 	result.ProcessedRecords += batchResult.SuccessCount + batchResult.FailedCount
 	result.SuccessCount += batchResult.SuccessCount
 	result.FailureCount += batchResult.FailedCount
@@ -570,7 +570,7 @@ func (s *ImportService) processBatchArticles(ctx context.Context, job *domain.Im
 	dbStart := time.Now()
 	batchResult := s.articleRepo.BulkInsert(ctx, articles)
 	dbDuration := time.Since(dbStart)
-	
+
 	result.ProcessedRecords += batchResult.SuccessCount + batchResult.FailedCount
 	result.SuccessCount += batchResult.SuccessCount
 	result.FailureCount += batchResult.FailedCount
@@ -721,7 +721,7 @@ func (s *ImportService) processBatchComments(ctx context.Context, job *domain.Im
 	dbStart := time.Now()
 	batchResult := s.commentRepo.BulkInsert(ctx, comments)
 	dbDuration := time.Since(dbStart)
-	
+
 	result.ProcessedRecords += batchResult.SuccessCount + batchResult.FailedCount
 	result.SuccessCount += batchResult.SuccessCount
 	result.FailureCount += batchResult.FailedCount

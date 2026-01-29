@@ -154,9 +154,10 @@ func (r *PostgresUserRepository) buildBulkInsertQuery(users []domain.User) (stri
 	// The query:
 	// 1. Collects input data with row numbers
 	// 2. Identifies emails that already exist in the DB
-	// 3. Separates valid rows (new emails) from invalid rows (duplicate emails)
-	// 4. Inserts valid rows and returns WHICH rows were actually inserted
-	// 5. Reports success only for rows that were actually inserted
+	// 3. Identifies in-batch duplicates (keep only first occurrence)
+	// 4. Separates valid rows from invalid rows
+	// 5. Inserts valid rows and returns WHICH rows were actually inserted
+	// 6. Reports success only for rows that were actually inserted
 	query := fmt.Sprintf(`
 WITH input_data AS (
     SELECT id, email, name, role, is_active, row_num::integer AS row_num 
@@ -165,15 +166,31 @@ WITH input_data AS (
 existing_emails AS (
     SELECT email FROM users WHERE email IN (SELECT email FROM input_data)
 ),
+-- Identify in-batch duplicates: for each email, only keep the first row_num
+first_occurrence AS (
+    SELECT email, MIN(row_num) AS first_row_num
+    FROM input_data
+    GROUP BY email
+),
+-- In-batch duplicates are rows that are not the first occurrence
+in_batch_duplicates AS (
+    SELECT id.row_num, 'duplicate_email_in_batch' AS error_reason
+    FROM input_data id
+    JOIN first_occurrence fo ON id.email = fo.email
+    WHERE id.row_num > fo.first_row_num
+),
 valid_rows AS (
     SELECT id, email, name, role, is_active, row_num
     FROM input_data
     WHERE email NOT IN (SELECT email FROM existing_emails)
+      AND row_num NOT IN (SELECT row_num FROM in_batch_duplicates)
 ),
 invalid_rows AS (
     SELECT row_num, 'duplicate_email' AS error_reason
     FROM input_data
     WHERE email IN (SELECT email FROM existing_emails)
+    UNION ALL
+    SELECT row_num, error_reason FROM in_batch_duplicates
 ),
 inserted AS (
     INSERT INTO users (id, email, name, role, is_active, created_at, updated_at)

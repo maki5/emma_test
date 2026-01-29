@@ -159,6 +159,7 @@ func (r *PostgresArticleRepository) buildBulkInsertQuery(articles []domain.Artic
 	}
 
 	// The query tracks actual insertions via LEFT JOIN to detect concurrent duplicates
+	// Also detects in-batch duplicates (slugs appearing multiple times in same batch)
 	query := fmt.Sprintf(`
 WITH input_data AS (
     SELECT id, slug, title, description, body, tags, author_id, status, row_num::integer AS row_num
@@ -170,11 +171,25 @@ valid_authors AS (
 existing_slugs AS (
     SELECT slug FROM articles WHERE slug IN (SELECT slug FROM input_data)
 ),
+-- Identify in-batch duplicates: for each slug, only keep the first row_num
+first_occurrence AS (
+    SELECT slug, MIN(row_num) AS first_row_num
+    FROM input_data
+    GROUP BY slug
+),
+-- In-batch duplicates are rows that are not the first occurrence
+in_batch_duplicates AS (
+    SELECT id.row_num, 'duplicate_slug_in_batch' AS error_reason
+    FROM input_data id
+    JOIN first_occurrence fo ON id.slug = fo.slug
+    WHERE id.row_num > fo.first_row_num
+),
 valid_rows AS (
     SELECT id, slug, title, description, body, tags, author_id, status, row_num
     FROM input_data
     WHERE author_id::uuid IN (SELECT id FROM valid_authors)
       AND slug NOT IN (SELECT slug FROM existing_slugs)
+      AND row_num NOT IN (SELECT row_num FROM in_batch_duplicates)
 ),
 invalid_fk AS (
     SELECT row_num, 'author_not_found' AS error_reason
@@ -212,6 +227,8 @@ UNION ALL
 SELECT row_num, false AS success, error_reason FROM invalid_fk
 UNION ALL
 SELECT row_num, false AS success, error_reason FROM invalid_slug
+UNION ALL
+SELECT row_num, false AS success, error_reason FROM in_batch_duplicates
 ORDER BY row_num
 `, strings.Join(values, ", "))
 
