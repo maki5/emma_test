@@ -4,12 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"strings"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"bulk-import-export/internal/domain"
+	"bulk-import-export/internal/logger"
 )
 
 // PostgresUserRepository implements UserRepository using PostgreSQL.
@@ -82,7 +83,9 @@ func (r *PostgresUserRepository) BulkInsert(ctx context.Context, users []domain.
 		var errorMsg *string
 
 		if err := rows.Scan(&rowNum, &success, &errorMsg); err != nil {
-			log.Printf("[user_repository] Failed to scan bulk insert result row: %v", err)
+			logger.Default().Error("Failed to scan bulk insert result row",
+				slog.String("repository", "user"),
+				slog.String("error", err.Error()))
 			result.FailedCount++
 			result.Errors = append(result.Errors, domain.RecordError{
 				Row:    0,

@@ -6,7 +6,7 @@ import (
 	"encoding/csv"
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sync"
@@ -15,6 +15,7 @@ import (
 	"github.com/google/uuid"
 
 	"bulk-import-export/internal/domain"
+	"bulk-import-export/internal/logger"
 	"bulk-import-export/internal/repository"
 )
 
@@ -111,14 +112,17 @@ func (s *ExportService) Close() {
 
 // StartExport creates an export job and queues it for processing.
 func (s *ExportService) StartExport(ctx context.Context, resourceType, format, idempotencyToken, requestID string) (*domain.ExportJob, error) {
-	log.Printf("[request_id=%s] Starting export for resource_type=%s, format=%s", requestID, resourceType, format)
+	logger.WithRequestID(requestID).Info("Starting export",
+		slog.String("resource_type", resourceType),
+		slog.String("format", format))
 
 	existingJob, err := s.jobRepo.GetExportJobByIdempotencyToken(ctx, idempotencyToken)
 	if err != nil {
 		return nil, fmt.Errorf("check idempotency token: %w", err)
 	}
 	if existingJob != nil {
-		log.Printf("[request_id=%s] Returning existing job %s for idempotency token", requestID, existingJob.ID)
+		logger.WithRequestID(requestID).Info("Returning existing job for idempotency token",
+			slog.String("job_id", existingJob.ID))
 		return existingJob, nil
 	}
 
@@ -149,9 +153,11 @@ func (s *ExportService) StartExport(ctx context.Context, resourceType, format, i
 	// Send to queue with timeout to prevent blocking
 	select {
 	case s.jobQueue <- exportTask{job: job, requestID: requestID}:
-		log.Printf("[request_id=%s] Job %s queued for processing", requestID, job.ID)
+		logger.WithRequestID(requestID).Info("Job queued for processing",
+			slog.String("job_id", job.ID))
 	case <-time.After(ExportQueueSendTimeout):
-		log.Printf("[request_id=%s] Warning: queue full, job %s will be processed when capacity available", requestID, job.ID)
+		logger.WithRequestID(requestID).Warn("Queue full, job will be processed when capacity available",
+			slog.String("job_id", job.ID))
 		// Try to send in a goroutine, but check if closed first
 		go func() {
 			s.mu.RLock()
@@ -179,12 +185,16 @@ func (s *ExportService) processExport(task exportTask) {
 	requestID := task.requestID
 	startTime := time.Now()
 
-	log.Printf("[request_id=%s] Processing export job %s: resource_type=%s, format=%s", requestID, job.ID, job.ResourceType, job.Format)
+	logger.WithRequestID(requestID).Info("Processing export job",
+		slog.String("job_id", job.ID),
+		slog.String("resource_type", job.ResourceType),
+		slog.String("format", job.Format))
 
 	job.Status = domain.JobStatusProcessing
 	job.UpdatedAt = time.Now()
 	if err := s.jobRepo.UpdateExportJob(ctx, job); err != nil {
-		log.Printf("[request_id=%s] Failed to update export job status to processing: %v", requestID, err)
+		logger.WithRequestID(requestID).Error("Failed to update export job status to processing",
+			slog.String("error", err.Error()))
 	}
 
 	var err error
@@ -204,7 +214,8 @@ func (s *ExportService) processExport(task exportTask) {
 		job.ErrorMessage = &errMsg
 		job.UpdatedAt = time.Now()
 		if err := s.jobRepo.UpdateExportJob(ctx, job); err != nil {
-			log.Printf("[request_id=%s] Failed to update export job: %v", requestID, err)
+			logger.WithRequestID(requestID).Error("Failed to update export job",
+				slog.String("error", err.Error()))
 		}
 		return
 	}
@@ -224,12 +235,16 @@ func (s *ExportService) processExport(task exportTask) {
 	}
 
 	if err := s.jobRepo.UpdateExportJob(ctx, job); err != nil {
-		log.Printf("[request_id=%s] Failed to update export job: %v", requestID, err)
+		logger.WithRequestID(requestID).Error("Failed to update export job",
+			slog.String("error", err.Error()))
 	}
 
 	elapsed := time.Since(startTime)
-	log.Printf("[request_id=%s] Export job %s completed: status=%s, total=%d, elapsed=%s",
-		requestID, job.ID, job.Status, job.TotalRecords, elapsed.Round(time.Millisecond))
+	logger.WithRequestID(requestID).Info("Export job completed",
+		slog.String("job_id", job.ID),
+		slog.String("status", string(job.Status)),
+		slog.Int("total_records", job.TotalRecords),
+		slog.Duration("elapsed", elapsed))
 }
 
 func (s *ExportService) exportUsers(ctx context.Context, job *domain.ExportJob) (string, int, error) {
@@ -250,13 +265,17 @@ func (s *ExportService) exportUsers(ctx context.Context, job *domain.ExportJob) 
 	defer func() {
 		// Sync to ensure data is flushed to disk
 		if syncErr := file.Sync(); syncErr != nil && exportErr == nil {
-			log.Printf("[export] Warning: failed to sync file %s: %v", filePath, syncErr)
+			logger.Warn("Failed to sync file",
+				slog.String("file_path", filePath),
+				slog.String("error", syncErr.Error()))
 		}
 		file.Close()
 		// Clean up partial file on error
 		if exportErr != nil {
 			if removeErr := os.Remove(filePath); removeErr != nil {
-				log.Printf("[export] Warning: failed to remove partial file %s: %v", filePath, removeErr)
+				logger.Warn("Failed to remove partial file",
+					slog.String("file_path", filePath),
+					slog.String("error", removeErr.Error()))
 			}
 		}
 	}()
@@ -336,12 +355,16 @@ func (s *ExportService) exportArticles(ctx context.Context, job *domain.ExportJo
 	var exportErr error
 	defer func() {
 		if syncErr := file.Sync(); syncErr != nil && exportErr == nil {
-			log.Printf("[export] Warning: failed to sync file %s: %v", filePath, syncErr)
+			logger.Warn("Failed to sync file",
+				slog.String("file_path", filePath),
+				slog.String("error", syncErr.Error()))
 		}
 		file.Close()
 		if exportErr != nil {
 			if removeErr := os.Remove(filePath); removeErr != nil {
-				log.Printf("[export] Warning: failed to remove partial file %s: %v", filePath, removeErr)
+				logger.Warn("Failed to remove partial file",
+					slog.String("file_path", filePath),
+					slog.String("error", removeErr.Error()))
 			}
 		}
 	}()
@@ -427,12 +450,16 @@ func (s *ExportService) exportComments(ctx context.Context, job *domain.ExportJo
 	var exportErr error
 	defer func() {
 		if syncErr := file.Sync(); syncErr != nil && exportErr == nil {
-			log.Printf("[export] Warning: failed to sync file %s: %v", filePath, syncErr)
+			logger.Warn("Failed to sync file",
+				slog.String("file_path", filePath),
+				slog.String("error", syncErr.Error()))
 		}
 		file.Close()
 		if exportErr != nil {
 			if removeErr := os.Remove(filePath); removeErr != nil {
-				log.Printf("[export] Warning: failed to remove partial file %s: %v", filePath, removeErr)
+				logger.Warn("Failed to remove partial file",
+					slog.String("file_path", filePath),
+					slog.String("error", removeErr.Error()))
 			}
 		}
 	}()

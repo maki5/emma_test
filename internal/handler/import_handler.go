@@ -1,13 +1,14 @@
 package handler
 
 import (
-	"log"
+	"log/slog"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 
 	"bulk-import-export/internal/domain"
+	"bulk-import-export/internal/logger"
 	"bulk-import-export/internal/middleware"
 	"bulk-import-export/internal/service"
 )
@@ -95,7 +96,8 @@ func (h *ImportHandler) CreateImport(c *gin.Context) {
 	requestID := middleware.GetRequestID(c)
 	job, err := h.importService.StartImport(c.Request.Context(), resourceType, idempotencyToken, header.Filename, requestID, file)
 	if err != nil {
-		log.Printf("[request_id=%s] Failed to start import: %v", requestID, err)
+		logger.WithRequestID(requestID).Error("Failed to start import",
+			slog.String("error", err.Error()))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to process import request"})
 		return
 	}
@@ -115,7 +117,9 @@ func (h *ImportHandler) GetImport(c *gin.Context) {
 
 	job, err := h.importService.GetImportJob(c.Request.Context(), id)
 	if err != nil {
-		log.Printf("[request_id=%s] Failed to get import job %s: %v", middleware.GetRequestID(c), id, err)
+		logger.WithRequestID(middleware.GetRequestID(c)).Error("Failed to get import job",
+			slog.String("job_id", id),
+			slog.String("error", err.Error()))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to retrieve import job"})
 		return
 	}

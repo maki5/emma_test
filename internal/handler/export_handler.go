@@ -1,13 +1,14 @@
 package handler
 
 import (
-	"log"
+	"log/slog"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 
 	"bulk-import-export/internal/domain"
+	"bulk-import-export/internal/logger"
 	"bulk-import-export/internal/middleware"
 	"bulk-import-export/internal/service"
 )
@@ -78,7 +79,8 @@ func (h *ExportHandler) CreateExport(c *gin.Context) {
 	requestID := middleware.GetRequestID(c)
 	job, err := h.exportService.StartExport(c.Request.Context(), req.ResourceType, req.Format, req.IdempotencyToken, requestID)
 	if err != nil {
-		log.Printf("[request_id=%s] Failed to start export: %v", requestID, err)
+		logger.WithRequestID(requestID).Error("Failed to start export",
+			slog.String("error", err.Error()))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to process export request"})
 		return
 	}
@@ -98,7 +100,9 @@ func (h *ExportHandler) GetExport(c *gin.Context) {
 
 	job, err := h.exportService.GetExportJob(c.Request.Context(), id)
 	if err != nil {
-		log.Printf("[request_id=%s] Failed to get export job %s: %v", middleware.GetRequestID(c), id, err)
+		logger.WithRequestID(middleware.GetRequestID(c)).Error("Failed to get export job",
+			slog.String("job_id", id),
+			slog.String("error", err.Error()))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to retrieve export job"})
 		return
 	}
@@ -145,7 +149,9 @@ func (h *ExportHandler) StreamExport(c *gin.Context) {
 	}
 
 	requestID := middleware.GetRequestID(c)
-	log.Printf("[request_id=%s] Streaming export: resource=%s, format=%s", requestID, req.Resource, req.Format)
+	logger.WithRequestID(requestID).Info("Streaming export",
+		slog.String("resource", req.Resource),
+		slog.String("format", req.Format))
 
 	// Set appropriate content type
 	contentType := "application/x-ndjson"
@@ -179,10 +185,13 @@ func (h *ExportHandler) StreamExport(c *gin.Context) {
 	}
 
 	if err != nil {
-		log.Printf("[request_id=%s] Streaming export error: %v", requestID, err)
+		logger.WithRequestID(requestID).Error("Streaming export error",
+			slog.String("error", err.Error()))
 		// Can't return error at this point as we've started writing
 		return
 	}
 
-	log.Printf("[request_id=%s] Streaming export completed: resource=%s, count=%d", requestID, req.Resource, count)
+	logger.WithRequestID(requestID).Info("Streaming export completed",
+		slog.String("resource", req.Resource),
+		slog.Int("count", count))
 }

@@ -5,12 +5,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"strings"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"bulk-import-export/internal/domain"
+	"bulk-import-export/internal/logger"
 )
 
 // PostgresArticleRepository implements ArticleRepository using PostgreSQL.
@@ -83,7 +84,9 @@ func (r *PostgresArticleRepository) BulkInsert(ctx context.Context, articles []d
 		var errorMsg *string
 
 		if err := rows.Scan(&rowNum, &success, &errorMsg); err != nil {
-			log.Printf("[article_repository] Failed to scan bulk insert result row: %v", err)
+			logger.Default().Error("Failed to scan bulk insert result row",
+				slog.String("repository", "article"),
+				slog.String("error", err.Error()))
 			result.FailedCount++
 			result.Errors = append(result.Errors, domain.RecordError{
 				Row:    0,

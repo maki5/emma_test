@@ -8,7 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"strings"
 	"sync"
 	"time"
@@ -16,6 +16,7 @@ import (
 	"github.com/google/uuid"
 
 	"bulk-import-export/internal/domain"
+	"bulk-import-export/internal/logger"
 	"bulk-import-export/internal/repository"
 	"bulk-import-export/internal/validator"
 )
@@ -122,14 +123,16 @@ func (s *ImportService) Close() {
 
 // StartImport creates an import job and queues it for processing.
 func (s *ImportService) StartImport(ctx context.Context, resourceType, idempotencyToken, filename, requestID string, reader io.Reader) (*domain.ImportJob, error) {
-	log.Printf("[request_id=%s] Starting import for resource_type=%s", requestID, resourceType)
+	logger.WithRequestID(requestID).Info("Starting import",
+		slog.String("resource_type", resourceType))
 
 	existingJob, err := s.jobRepo.GetImportJobByIdempotencyToken(ctx, idempotencyToken)
 	if err != nil {
 		return nil, fmt.Errorf("check idempotency token: %w", err)
 	}
 	if existingJob != nil {
-		log.Printf("[request_id=%s] Returning existing job %s for idempotency token", requestID, existingJob.ID)
+		logger.WithRequestID(requestID).Info("Returning existing job for idempotency token",
+			slog.String("job_id", existingJob.ID))
 		return existingJob, nil
 	}
 
@@ -174,9 +177,11 @@ func (s *ImportService) StartImport(ctx context.Context, resourceType, idempoten
 		data:      data,
 		requestID: requestID,
 	}:
-		log.Printf("[request_id=%s] Job %s queued for processing", requestID, job.ID)
+		logger.WithRequestID(requestID).Info("Job queued for processing",
+			slog.String("job_id", job.ID))
 	case <-time.After(QueueSendTimeout):
-		log.Printf("[request_id=%s] Warning: queue full, job %s will be processed when capacity available", requestID, job.ID)
+		logger.WithRequestID(requestID).Warn("Queue full, job will be processed when capacity available",
+			slog.String("job_id", job.ID))
 		// Try to send in a goroutine, but check if closed first
 		go func() {
 			s.mu.RLock()
@@ -208,17 +213,22 @@ func (s *ImportService) processImport(task importTask) {
 	requestID := task.requestID
 	startTime := time.Now()
 
-	log.Printf("[request_id=%s] Processing import job %s: resource_type=%s", requestID, job.ID, job.ResourceType)
+	logger.WithRequestID(requestID).Info("Processing import job",
+		slog.String("job_id", job.ID),
+		slog.String("resource_type", job.ResourceType))
 
 	job.Status = domain.JobStatusProcessing
 	job.UpdatedAt = time.Now()
 	if err := s.jobRepo.UpdateImportJob(ctx, job); err != nil {
-		log.Printf("[request_id=%s] Failed to update import job status to processing: %v", requestID, err)
+		logger.WithRequestID(requestID).Error("Failed to update import job status to processing",
+			slog.String("error", err.Error()))
 	}
 
 	// Create a reader from the buffered data
 	reader := bytes.NewReader(task.data)
-	log.Printf("[request_id=%s] Starting %s import processing, data size: %d bytes", requestID, job.ResourceType, len(task.data))
+	logger.WithRequestID(requestID).Info("Starting import processing",
+		slog.String("resource_type", job.ResourceType),
+		slog.Int("data_size_bytes", len(task.data)))
 
 	var result domain.ImportResult
 
@@ -235,7 +245,8 @@ func (s *ImportService) processImport(task importTask) {
 		job.ErrorMessage = &errMsg
 		job.UpdatedAt = time.Now()
 		if err := s.jobRepo.UpdateImportJob(ctx, job); err != nil {
-			log.Printf("[request_id=%s] Failed to update import job: %v", requestID, err)
+			logger.WithJobID(job.ID).Error("Failed to update import job",
+				slog.String("error", err.Error()))
 		}
 		return
 	}
@@ -257,19 +268,25 @@ func (s *ImportService) processImport(task importTask) {
 	}
 
 	if err := s.jobRepo.UpdateImportJob(ctx, job); err != nil {
-		log.Printf("[request_id=%s] Failed to update import job: %v", requestID, err)
+		logger.WithRequestID(requestID).Error("Failed to update import job",
+			slog.String("error", err.Error()))
 	}
 
 	elapsed := time.Since(startTime)
-	log.Printf("[request_id=%s] Import job %s completed: status=%s, total=%d, success=%d, failed=%d, elapsed=%s",
-		requestID, job.ID, job.Status, job.TotalRecords, job.SuccessCount, job.FailureCount, elapsed.Round(time.Millisecond))
+	logger.WithRequestID(requestID).Info("Import job completed",
+		slog.String("job_id", job.ID),
+		slog.String("status", string(job.Status)),
+		slog.Int("total_records", job.TotalRecords),
+		slog.Int("success_count", job.SuccessCount),
+		slog.Int("failure_count", job.FailureCount),
+		slog.Duration("elapsed", elapsed))
 }
 
 func (s *ImportService) importUsers(ctx context.Context, job *domain.ImportJob, reader io.Reader) domain.ImportResult {
 	result := domain.ImportResult{
 		Errors: make([]domain.RecordError, 0, ErrorSlicePreallocSize),
 	}
-	log.Printf("[job_id=%s] Starting CSV parsing for users", job.ID)
+	logger.WithJobID(job.ID).Info("Starting CSV parsing for users")
 
 	csvReader := csv.NewReader(reader)
 
@@ -282,7 +299,8 @@ func (s *ImportService) importUsers(ctx context.Context, job *domain.ImportJob, 
 		})
 		return result
 	}
-	log.Printf("[job_id=%s] CSV header parsed: %v", job.ID, header)
+	logger.WithJobID(job.ID).Debug("CSV header parsed",
+		slog.Any("header", header))
 
 	colMap := make(map[string]int)
 	for i, col := range header {
@@ -338,9 +356,12 @@ func (s *ImportService) importUsers(ctx context.Context, job *domain.ImportJob, 
 			if !lastProgressTime.IsZero() {
 				sinceLast = now.Sub(lastProgressTime)
 			}
-			log.Printf("[job_id=%s] Parsing progress: %d records parsed in %v (last 1000 in %v, validation=%v, db=%v)",
-				job.ID, result.TotalRecords, time.Since(parseStart).Round(time.Millisecond),
-				sinceLast.Round(time.Millisecond), totalValidationTime.Round(time.Millisecond), totalDBTime.Round(time.Millisecond))
+			logger.WithJobID(job.ID).Info("Parsing progress",
+				slog.Int("parsed_records", result.TotalRecords),
+				slog.Duration("elapsed", time.Since(parseStart)),
+				slog.Duration("since_last", sinceLast),
+				slog.Duration("validation_time", totalValidationTime),
+				slog.Duration("db_time", totalDBTime))
 			lastProgressTime = now
 		}
 
@@ -384,10 +405,13 @@ func (s *ImportService) importUsers(ctx context.Context, job *domain.ImportJob, 
 		}
 	}
 
-	log.Printf("[job_id=%s] CSV parsing complete: %d records parsed in %v (valid=%d, invalid=%d, validation_time=%v, db_time=%v)",
-		job.ID, result.TotalRecords, time.Since(parseStart).Round(time.Millisecond),
-		result.TotalRecords-result.FailureCount, result.FailureCount,
-		totalValidationTime.Round(time.Millisecond), totalDBTime.Round(time.Millisecond))
+	logger.WithJobID(job.ID).Info("CSV parsing complete",
+		slog.Int("total_records", result.TotalRecords),
+		slog.Duration("parse_time", time.Since(parseStart)),
+		slog.Int("valid_records", result.TotalRecords-result.FailureCount),
+		slog.Int("invalid_records", result.FailureCount),
+		slog.Duration("validation_time", totalValidationTime),
+		slog.Duration("db_time", totalDBTime))
 
 	if len(batch) > 0 {
 		s.processBatchUsers(ctx, job, batch, &result)
@@ -405,7 +429,9 @@ type userBatchItem struct {
 func (s *ImportService) processBatchUsers(ctx context.Context, job *domain.ImportJob, batch []userBatchItem, result *domain.ImportResult) {
 	batchNum := (result.ProcessedRecords / s.batchSize) + 1
 	batchStart := time.Now()
-	log.Printf("[job_id=%s] Users import: processing batch %d (%d records)", job.ID, batchNum, len(batch))
+	logger.WithJobID(job.ID).Info("Processing users batch",
+		slog.Int("batch_number", batchNum),
+		slog.Int("batch_size", len(batch)))
 
 	// Create row number mapping: batch index -> absolute row number
 	prepStart := time.Now()
@@ -425,9 +451,15 @@ func (s *ImportService) processBatchUsers(ctx context.Context, job *domain.Impor
 	result.SuccessCount += batchResult.SuccessCount
 	result.FailureCount += batchResult.FailedCount
 
-	log.Printf("[job_id=%s] Users import: batch %d done - progress: %d/%d records (success=%d, failed=%d) [prep=%v, db=%v, total=%v]",
-		job.ID, batchNum, result.ProcessedRecords, result.TotalRecords, result.SuccessCount, result.FailureCount,
-		prepDuration.Round(time.Microsecond), dbDuration.Round(time.Millisecond), time.Since(batchStart).Round(time.Millisecond))
+	logger.WithJobID(job.ID).Info("Batch processing complete",
+		slog.Int("batch_number", batchNum),
+		slog.Int("processed_records", result.ProcessedRecords),
+		slog.Int("total_records", result.TotalRecords),
+		slog.Int("success_count", result.SuccessCount),
+		slog.Int("failure_count", result.FailureCount),
+		slog.Duration("prep_time", prepDuration),
+		slog.Duration("db_time", dbDuration),
+		slog.Duration("total_time", time.Since(batchStart)))
 
 	// Log batch errors if any
 	if batchResult.FailedCount > 0 && len(batchResult.Errors) > 0 {
@@ -438,12 +470,16 @@ func (s *ImportService) processBatchUsers(ctx context.Context, job *domain.Impor
 		}
 		for i := 0; i < maxSamples; i++ {
 			err := batchResult.Errors[i]
-			log.Printf("[job_id=%s] Batch %d error sample: row=%d, field=%s, reason=%s",
-				job.ID, batchNum, err.Row, err.Field, err.Reason)
+			logger.WithJobID(job.ID).Warn("Batch error sample",
+				slog.Int("batch_number", batchNum),
+				slog.Int("row", err.Row),
+				slog.String("field", err.Field),
+				slog.String("reason", err.Reason))
 		}
 		if len(batchResult.Errors) > maxSamples {
-			log.Printf("[job_id=%s] Batch %d: ... and %d more errors",
-				job.ID, batchNum, len(batchResult.Errors)-maxSamples)
+			logger.WithJobID(job.ID).Warn("Additional batch errors",
+				slog.Int("batch_number", batchNum),
+				slog.Int("additional_errors", len(batchResult.Errors)-maxSamples))
 		}
 	}
 
@@ -460,7 +496,7 @@ func (s *ImportService) importArticles(ctx context.Context, job *domain.ImportJo
 	result := domain.ImportResult{
 		Errors: make([]domain.RecordError, 0, ErrorSlicePreallocSize),
 	}
-	log.Printf("[job_id=%s] Starting NDJSON parsing for articles", job.ID)
+	logger.WithJobID(job.ID).Info("Starting NDJSON parsing for articles")
 	parseStart := time.Now()
 	var totalValidationTime time.Duration
 	var totalDBTime time.Duration
@@ -491,9 +527,12 @@ func (s *ImportService) importArticles(ctx context.Context, job *domain.ImportJo
 			if !lastProgressTime.IsZero() {
 				sinceLast = now.Sub(lastProgressTime)
 			}
-			log.Printf("[job_id=%s] Parsing progress: %d records parsed in %v (last 1000 in %v, validation=%v, db=%v)",
-				job.ID, result.TotalRecords, time.Since(parseStart).Round(time.Millisecond),
-				sinceLast.Round(time.Millisecond), totalValidationTime.Round(time.Millisecond), totalDBTime.Round(time.Millisecond))
+			logger.WithJobID(job.ID).Info("Parsing progress",
+				slog.Int("parsed_records", result.TotalRecords),
+				slog.Duration("elapsed", time.Since(parseStart)),
+				slog.Duration("since_last", sinceLast),
+				slog.Duration("validation_time", totalValidationTime),
+				slog.Duration("db_time", totalDBTime))
 			lastProgressTime = now
 		}
 
@@ -528,7 +567,7 @@ func (s *ImportService) importArticles(ctx context.Context, job *domain.ImportJo
 	}
 
 	if err := scanner.Err(); err != nil {
-		log.Printf("[job_id=%s] Scanner error during articles import: %v", job.ID, err)
+		logger.WithJobID(job.ID).Error("Scanner error during articles import", slog.String("error", err.Error()))
 		result.Errors = append(result.Errors, domain.RecordError{
 			Row:    rowNum,
 			Field:  "scanner",
@@ -537,10 +576,13 @@ func (s *ImportService) importArticles(ctx context.Context, job *domain.ImportJo
 		result.FailureCount++
 	}
 
-	log.Printf("[job_id=%s] NDJSON parsing complete: %d records parsed in %v (valid=%d, invalid=%d, validation_time=%v, db_time=%v)",
-		job.ID, result.TotalRecords, time.Since(parseStart).Round(time.Millisecond),
-		result.TotalRecords-result.FailureCount, result.FailureCount,
-		totalValidationTime.Round(time.Millisecond), totalDBTime.Round(time.Millisecond))
+	logger.WithJobID(job.ID).Info("NDJSON parsing complete",
+		slog.Int("total_records", result.TotalRecords),
+		slog.Duration("parse_time", time.Since(parseStart)),
+		slog.Int("valid_records", result.TotalRecords-result.FailureCount),
+		slog.Int("invalid_records", result.FailureCount),
+		slog.Duration("validation_time", totalValidationTime),
+		slog.Duration("db_time", totalDBTime))
 
 	if len(batch) > 0 {
 		s.processBatchArticles(ctx, job, batch, &result)
@@ -558,7 +600,9 @@ type articleBatchItem struct {
 func (s *ImportService) processBatchArticles(ctx context.Context, job *domain.ImportJob, batch []articleBatchItem, result *domain.ImportResult) {
 	batchNum := (result.ProcessedRecords / s.batchSize) + 1
 	batchStart := time.Now()
-	log.Printf("[job_id=%s] Articles import: processing batch %d (%d records)", job.ID, batchNum, len(batch))
+	logger.WithJobID(job.ID).Info("Articles import: processing batch",
+		slog.Int("batch_num", batchNum),
+		slog.Int("records", len(batch)))
 
 	rowMapping := make(map[int]int)
 	articles := make([]domain.Article, len(batch))
@@ -575,9 +619,14 @@ func (s *ImportService) processBatchArticles(ctx context.Context, job *domain.Im
 	result.SuccessCount += batchResult.SuccessCount
 	result.FailureCount += batchResult.FailedCount
 
-	log.Printf("[job_id=%s] Articles import: batch %d done - progress: %d/%d records (success=%d, failed=%d) [db=%v, total=%v]",
-		job.ID, batchNum, result.ProcessedRecords, result.TotalRecords, result.SuccessCount, result.FailureCount,
-		dbDuration.Round(time.Millisecond), time.Since(batchStart).Round(time.Millisecond))
+	logger.WithJobID(job.ID).Info("Articles import: batch done",
+		slog.Int("batch_num", batchNum),
+		slog.Int("processed_records", result.ProcessedRecords),
+		slog.Int("total_records", result.TotalRecords),
+		slog.Int("success_count", result.SuccessCount),
+		slog.Int("failure_count", result.FailureCount),
+		slog.Duration("db_time", dbDuration),
+		slog.Duration("batch_time", time.Since(batchStart)))
 
 	// Log batch errors if any
 	if batchResult.FailedCount > 0 && len(batchResult.Errors) > 0 {
@@ -587,12 +636,16 @@ func (s *ImportService) processBatchArticles(ctx context.Context, job *domain.Im
 		}
 		for i := 0; i < maxSamples; i++ {
 			err := batchResult.Errors[i]
-			log.Printf("[job_id=%s] Batch %d error sample: row=%d, field=%s, reason=%s",
-				job.ID, batchNum, err.Row, err.Field, err.Reason)
+			logger.WithJobID(job.ID).Error("Batch error sample",
+				slog.Int("batch_num", batchNum),
+				slog.Int("row", err.Row),
+				slog.String("field", err.Field),
+				slog.String("reason", err.Reason))
 		}
 		if len(batchResult.Errors) > maxSamples {
-			log.Printf("[job_id=%s] Batch %d: ... and %d more errors",
-				job.ID, batchNum, len(batchResult.Errors)-maxSamples)
+			logger.WithJobID(job.ID).Error("Batch has more errors",
+				slog.Int("batch_num", batchNum),
+				slog.Int("additional_errors", len(batchResult.Errors)-maxSamples))
 		}
 	}
 
@@ -608,7 +661,7 @@ func (s *ImportService) importComments(ctx context.Context, job *domain.ImportJo
 	result := domain.ImportResult{
 		Errors: make([]domain.RecordError, 0, ErrorSlicePreallocSize),
 	}
-	log.Printf("[job_id=%s] Starting NDJSON parsing for comments", job.ID)
+	logger.WithJobID(job.ID).Info("Starting NDJSON parsing for comments")
 	parseStart := time.Now()
 	var totalValidationTime time.Duration
 	var totalDBTime time.Duration
@@ -639,9 +692,12 @@ func (s *ImportService) importComments(ctx context.Context, job *domain.ImportJo
 			if !lastProgressTime.IsZero() {
 				sinceLast = now.Sub(lastProgressTime)
 			}
-			log.Printf("[job_id=%s] Parsing progress: %d records parsed in %v (last 1000 in %v, validation=%v, db=%v)",
-				job.ID, result.TotalRecords, time.Since(parseStart).Round(time.Millisecond),
-				sinceLast.Round(time.Millisecond), totalValidationTime.Round(time.Millisecond), totalDBTime.Round(time.Millisecond))
+			logger.WithJobID(job.ID).Info("Parsing progress",
+				slog.Int("parsed_records", result.TotalRecords),
+				slog.Duration("elapsed", time.Since(parseStart)),
+				slog.Duration("since_last", sinceLast),
+				slog.Duration("validation_time", totalValidationTime),
+				slog.Duration("db_time", totalDBTime))
 			lastProgressTime = now
 		}
 
@@ -676,7 +732,7 @@ func (s *ImportService) importComments(ctx context.Context, job *domain.ImportJo
 	}
 
 	if err := scanner.Err(); err != nil {
-		log.Printf("[job_id=%s] Scanner error during comments import: %v", job.ID, err)
+		logger.WithJobID(job.ID).Error("Scanner error during articles import", slog.String("error", err.Error()))
 		result.Errors = append(result.Errors, domain.RecordError{
 			Row:    rowNum,
 			Field:  "scanner",
@@ -685,10 +741,13 @@ func (s *ImportService) importComments(ctx context.Context, job *domain.ImportJo
 		result.FailureCount++
 	}
 
-	log.Printf("[job_id=%s] NDJSON parsing complete: %d records parsed in %v (valid=%d, invalid=%d, validation_time=%v, db_time=%v)",
-		job.ID, result.TotalRecords, time.Since(parseStart).Round(time.Millisecond),
-		result.TotalRecords-result.FailureCount, result.FailureCount,
-		totalValidationTime.Round(time.Millisecond), totalDBTime.Round(time.Millisecond))
+	logger.WithJobID(job.ID).Info("NDJSON parsing complete",
+		slog.Int("total_records", result.TotalRecords),
+		slog.Duration("parse_time", time.Since(parseStart)),
+		slog.Int("valid_records", result.TotalRecords-result.FailureCount),
+		slog.Int("invalid_records", result.FailureCount),
+		slog.Duration("validation_time", totalValidationTime),
+		slog.Duration("db_time", totalDBTime))
 
 	if len(batch) > 0 {
 		s.processBatchComments(ctx, job, batch, &result)
@@ -706,7 +765,9 @@ type commentBatchItem struct {
 func (s *ImportService) processBatchComments(ctx context.Context, job *domain.ImportJob, batch []commentBatchItem, result *domain.ImportResult) {
 	batchNum := (result.ProcessedRecords / s.batchSize) + 1
 	batchStart := time.Now()
-	log.Printf("[job_id=%s] Comments import: processing batch %d (%d records)", job.ID, batchNum, len(batch))
+	logger.WithJobID(job.ID).Info("Comments import: processing batch",
+		slog.Int("batch_num", batchNum),
+		slog.Int("records", len(batch)))
 
 	rowMapping := make(map[int]int)
 	comments := make([]domain.Comment, len(batch))
@@ -726,9 +787,14 @@ func (s *ImportService) processBatchComments(ctx context.Context, job *domain.Im
 	result.SuccessCount += batchResult.SuccessCount
 	result.FailureCount += batchResult.FailedCount
 
-	log.Printf("[job_id=%s] Comments import: batch %d done - progress: %d/%d records (success=%d, failed=%d) [db=%v, total=%v]",
-		job.ID, batchNum, result.ProcessedRecords, result.TotalRecords, result.SuccessCount, result.FailureCount,
-		dbDuration.Round(time.Millisecond), time.Since(batchStart).Round(time.Millisecond))
+	logger.WithJobID(job.ID).Info("Comments import: batch done",
+		slog.Int("batch_num", batchNum),
+		slog.Int("processed_records", result.ProcessedRecords),
+		slog.Int("total_records", result.TotalRecords),
+		slog.Int("success_count", result.SuccessCount),
+		slog.Int("failure_count", result.FailureCount),
+		slog.Duration("db_time", dbDuration),
+		slog.Duration("batch_time", time.Since(batchStart)))
 
 	// Log batch errors if any
 	if batchResult.FailedCount > 0 && len(batchResult.Errors) > 0 {
@@ -738,12 +804,16 @@ func (s *ImportService) processBatchComments(ctx context.Context, job *domain.Im
 		}
 		for i := 0; i < maxSamples; i++ {
 			err := batchResult.Errors[i]
-			log.Printf("[job_id=%s] Batch %d error sample: row=%d, field=%s, reason=%s",
-				job.ID, batchNum, err.Row, err.Field, err.Reason)
+			logger.WithJobID(job.ID).Error("Batch error sample",
+				slog.Int("batch_num", batchNum),
+				slog.Int("row", err.Row),
+				slog.String("field", err.Field),
+				slog.String("reason", err.Reason))
 		}
 		if len(batchResult.Errors) > maxSamples {
-			log.Printf("[job_id=%s] Batch %d: ... and %d more errors",
-				job.ID, batchNum, len(batchResult.Errors)-maxSamples)
+			logger.WithJobID(job.ID).Error("Batch has more errors",
+				slog.Int("batch_num", batchNum),
+				slog.Int("additional_errors", len(batchResult.Errors)-maxSamples))
 		}
 	}
 
