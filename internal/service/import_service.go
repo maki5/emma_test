@@ -17,6 +17,7 @@ import (
 
 	"bulk-import-export/internal/domain"
 	"bulk-import-export/internal/logger"
+	"bulk-import-export/internal/metrics"
 	"bulk-import-export/internal/repository"
 	"bulk-import-export/internal/validator"
 )
@@ -213,6 +214,10 @@ func (s *ImportService) processImport(task importTask) {
 	requestID := task.requestID
 	startTime := time.Now()
 
+	// Track job in metrics
+	metrics.StartJob("import", job.ResourceType)
+	defer metrics.EndJob("import", job.ResourceType)
+
 	logger.WithRequestID(requestID).Info("Processing import job",
 		slog.String("job_id", job.ID),
 		slog.String("resource_type", job.ResourceType))
@@ -280,6 +285,9 @@ func (s *ImportService) processImport(task importTask) {
 		slog.Int("success_count", job.SuccessCount),
 		slog.Int("failure_count", job.FailureCount),
 		slog.Duration("elapsed", elapsed))
+
+	// Record job completion metrics
+	metrics.ObserveJobCompletion("import", job.ResourceType, string(job.Status), elapsed.Seconds(), job.SuccessCount, job.FailureCount)
 }
 
 func (s *ImportService) importUsers(ctx context.Context, job *domain.ImportJob, reader io.Reader) domain.ImportResult {
@@ -461,6 +469,9 @@ func (s *ImportService) processBatchUsers(ctx context.Context, job *domain.Impor
 		slog.Duration("db_time", dbDuration),
 		slog.Duration("total_time", time.Since(batchStart)))
 
+	// Record batch metrics
+	metrics.ObserveBatchDuration("import", "users", "db", dbDuration.Seconds())
+
 	// Log batch errors if any
 	if batchResult.FailedCount > 0 && len(batchResult.Errors) > 0 {
 		// Log first few errors as samples
@@ -627,6 +638,9 @@ func (s *ImportService) processBatchArticles(ctx context.Context, job *domain.Im
 		slog.Int("failure_count", result.FailureCount),
 		slog.Duration("db_time", dbDuration),
 		slog.Duration("batch_time", time.Since(batchStart)))
+
+	// Record batch metrics
+	metrics.ObserveBatchDuration("import", "articles", "db", dbDuration.Seconds())
 
 	// Log batch errors if any
 	if batchResult.FailedCount > 0 && len(batchResult.Errors) > 0 {
@@ -795,6 +809,9 @@ func (s *ImportService) processBatchComments(ctx context.Context, job *domain.Im
 		slog.Int("failure_count", result.FailureCount),
 		slog.Duration("db_time", dbDuration),
 		slog.Duration("batch_time", time.Since(batchStart)))
+
+	// Record batch metrics
+	metrics.ObserveBatchDuration("import", "comments", "db", dbDuration.Seconds())
 
 	// Log batch errors if any
 	if batchResult.FailedCount > 0 && len(batchResult.Errors) > 0 {

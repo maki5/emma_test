@@ -1,0 +1,167 @@
+groups:
+  - name: bulk_import_export_alerts
+    rules:
+      # HTTP Error Rate Alert
+      - alert: HighHTTPErrorRate
+        expr: |
+          (
+            sum(rate(bulk_import_export_http_requests_total{status=~"5.."}[5m]))
+            /
+            sum(rate(bulk_import_export_http_requests_total[5m]))
+          ) > 0.05
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High HTTP error rate detected"
+          description: "HTTP 5xx error rate is above 5% (current: {{ $value | humanizePercentage }})"
+
+      - alert: CriticalHTTPErrorRate
+        expr: |
+          (
+            sum(rate(bulk_import_export_http_requests_total{status=~"5.."}[5m]))
+            /
+            sum(rate(bulk_import_export_http_requests_total[5m]))
+          ) > 0.15
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Critical HTTP error rate"
+          description: "HTTP 5xx error rate is above 15% (current: {{ $value | humanizePercentage }})"
+
+      # High Latency Alert
+      - alert: HighHTTPLatency
+        expr: |
+          histogram_quantile(0.99, 
+            sum(rate(bulk_import_export_http_request_duration_seconds_bucket[5m])) by (le)
+          ) > 5
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High HTTP request latency"
+          description: "P99 latency is above 5 seconds (current: {{ $value | humanizeDuration }})"
+
+      # Job Failure Alert
+      - alert: HighJobFailureRate
+        expr: |
+          (
+            sum(rate(bulk_import_export_jobs_total{status=~"failed|completed_with_errors"}[15m]))
+            /
+            sum(rate(bulk_import_export_jobs_total[15m]))
+          ) > 0.10
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High job failure rate"
+          description: "More than 10% of jobs are failing (current: {{ $value | humanizePercentage }})"
+
+      - alert: JobProcessingStuck
+        expr: |
+          sum(bulk_import_export_jobs_in_progress) > 0
+          and
+          sum(increase(bulk_import_export_jobs_total[10m])) == 0
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Jobs appear to be stuck"
+          description: "Jobs are in progress but no jobs have completed in the last 10 minutes"
+
+      # Record Processing Alerts
+      - alert: HighRecordFailureRate
+        expr: |
+          (
+            sum(rate(bulk_import_export_records_processed_total{result="failure"}[15m]))
+            /
+            sum(rate(bulk_import_export_records_processed_total[15m]))
+          ) > 0.10
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High record processing failure rate"
+          description: "More than 10% of records are failing to process (current: {{ $value | humanizePercentage }})"
+
+      # Database Connection Pool Alerts
+      - alert: DatabaseConnectionPoolExhaustion
+        expr: |
+          (
+            bulk_import_export_db_pool_connections{state="in_use"}
+            /
+            bulk_import_export_db_pool_connections{state="total"}
+          ) > 0.90
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Database connection pool near exhaustion"
+          description: "More than 90% of database connections are in use"
+
+      - alert: DatabaseConnectionPoolCritical
+        expr: |
+          (
+            bulk_import_export_db_pool_connections{state="in_use"}
+            /
+            bulk_import_export_db_pool_connections{state="total"}
+          ) > 0.98
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Database connection pool critically exhausted"
+          description: "More than 98% of database connections are in use"
+
+      - alert: NoIdleDatabaseConnections
+        expr: bulk_import_export_db_pool_connections{state="idle"} == 0
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "No idle database connections"
+          description: "All database connections are currently in use"
+
+      # Streaming Export Alerts
+      - alert: StreamingExportErrors
+        expr: |
+          sum(rate(bulk_import_export_streaming_exports_total{result="error"}[5m])) > 0
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Streaming exports are failing"
+          description: "Streaming exports are experiencing errors"
+
+      - alert: SlowStreamingExports
+        expr: |
+          histogram_quantile(0.99, 
+            sum(rate(bulk_import_export_streaming_export_duration_seconds_bucket[5m])) by (le)
+          ) > 30
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Slow streaming exports"
+          description: "P99 streaming export duration is above 30 seconds"
+
+      # Service Availability
+      - alert: ServiceDown
+        expr: up{job="bulk-import-export"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Bulk Import/Export service is down"
+          description: "The service has been unreachable for more than 1 minute"
+
+      - alert: ServiceUnstable
+        expr: |
+          avg_over_time(up{job="bulk-import-export"}[5m]) < 0.9
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Service availability is degraded"
+          description: "Service has been up less than 90% of the time in the last 5 minutes"

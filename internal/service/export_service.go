@@ -16,6 +16,7 @@ import (
 
 	"bulk-import-export/internal/domain"
 	"bulk-import-export/internal/logger"
+	"bulk-import-export/internal/metrics"
 	"bulk-import-export/internal/repository"
 )
 
@@ -185,6 +186,10 @@ func (s *ExportService) processExport(task exportTask) {
 	requestID := task.requestID
 	startTime := time.Now()
 
+	// Track job in metrics
+	metrics.StartJob("export", job.ResourceType)
+	defer metrics.EndJob("export", job.ResourceType)
+
 	logger.WithRequestID(requestID).Info("Processing export job",
 		slog.String("job_id", job.ID),
 		slog.String("resource_type", job.ResourceType),
@@ -245,6 +250,16 @@ func (s *ExportService) processExport(task exportTask) {
 		slog.String("status", string(job.Status)),
 		slog.Int("total_records", job.TotalRecords),
 		slog.Duration("elapsed", elapsed))
+
+	// Record job completion metrics
+	// For exports, if the job failed, all records are considered failed
+	successCount := job.TotalRecords
+	failureCount := 0
+	if job.Status == domain.JobStatusFailed {
+		successCount = 0
+		failureCount = job.TotalRecords
+	}
+	metrics.ObserveJobCompletion("export", job.ResourceType, string(job.Status), elapsed.Seconds(), successCount, failureCount)
 }
 
 func (s *ExportService) exportUsers(ctx context.Context, job *domain.ExportJob) (string, int, error) {
@@ -530,6 +545,22 @@ func (s *ExportService) GetExportJob(ctx context.Context, id string) (*domain.Ex
 
 // StreamUsers streams users directly to the writer in the specified format.
 func (s *ExportService) StreamUsers(ctx context.Context, format string, writer StreamWriter) (int, error) {
+	startTime := time.Now()
+	metrics.StartStreamingExport("users")
+
+	count, err := s.streamUsers(ctx, format, writer)
+
+	// Record metrics
+	result := "success"
+	if err != nil {
+		result = "error"
+	}
+	metrics.EndStreamingExport("users", format, result, time.Since(startTime).Seconds(), count)
+
+	return count, err
+}
+
+func (s *ExportService) streamUsers(ctx context.Context, format string, writer StreamWriter) (int, error) {
 	var count int
 
 	if format == "csv" {
@@ -584,6 +615,22 @@ func (s *ExportService) StreamUsers(ctx context.Context, format string, writer S
 
 // StreamArticles streams articles directly to the writer in the specified format.
 func (s *ExportService) StreamArticles(ctx context.Context, format string, writer StreamWriter) (int, error) {
+	startTime := time.Now()
+	metrics.StartStreamingExport("articles")
+
+	count, err := s.streamArticles(ctx, format, writer)
+
+	// Record metrics
+	result := "success"
+	if err != nil {
+		result = "error"
+	}
+	metrics.EndStreamingExport("articles", format, result, time.Since(startTime).Seconds(), count)
+
+	return count, err
+}
+
+func (s *ExportService) streamArticles(ctx context.Context, format string, writer StreamWriter) (int, error) {
 	var count int
 
 	if format == "csv" {
@@ -641,6 +688,22 @@ func (s *ExportService) StreamArticles(ctx context.Context, format string, write
 
 // StreamComments streams comments directly to the writer in the specified format.
 func (s *ExportService) StreamComments(ctx context.Context, format string, writer StreamWriter) (int, error) {
+	startTime := time.Now()
+	metrics.StartStreamingExport("comments")
+
+	count, err := s.streamComments(ctx, format, writer)
+
+	// Record metrics
+	result := "success"
+	if err != nil {
+		result = "error"
+	}
+	metrics.EndStreamingExport("comments", format, result, time.Since(startTime).Seconds(), count)
+
+	return count, err
+}
+
+func (s *ExportService) streamComments(ctx context.Context, format string, writer StreamWriter) (int, error) {
 	var count int
 
 	if format == "csv" {

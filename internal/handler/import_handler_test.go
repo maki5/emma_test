@@ -50,7 +50,7 @@ func TestImportHandler_CreateImport(t *testing.T) {
 		writer := multipart.NewWriter(body)
 		_ = writer.WriteField("resource_type", "users")
 		part, _ := writer.CreateFormFile("file", "users.csv")
-		part.Write([]byte("email,name,role\ntest@example.com,Test User,user"))
+		_, _ = part.Write([]byte("email,name,role\ntest@example.com,Test User,user"))
 		writer.Close()
 
 		req := httptest.NewRequest(http.MethodPost, "/api/v1/imports", body)
@@ -79,7 +79,7 @@ func TestImportHandler_CreateImport(t *testing.T) {
 		body := &bytes.Buffer{}
 		writer := multipart.NewWriter(body)
 		part, _ := writer.CreateFormFile("file", "users.csv")
-		part.Write([]byte("email,name,role\ntest@example.com,Test User,user"))
+		_, _ = part.Write([]byte("email,name,role\ntest@example.com,Test User,user"))
 		writer.Close()
 
 		req := httptest.NewRequest(http.MethodPost, "/api/v1/imports", body)
@@ -103,7 +103,7 @@ func TestImportHandler_CreateImport(t *testing.T) {
 		writer := multipart.NewWriter(body)
 		_ = writer.WriteField("resource_type", "invalid")
 		part, _ := writer.CreateFormFile("file", "file.csv")
-		part.Write([]byte("data"))
+		_, _ = part.Write([]byte("data"))
 		writer.Close()
 
 		req := httptest.NewRequest(http.MethodPost, "/api/v1/imports", body)

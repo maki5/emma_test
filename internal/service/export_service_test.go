@@ -371,7 +371,7 @@ func TestExportService_ProcessExport_Users(t *testing.T) {
 			Run(func(ctx context.Context, callback func(domain.User) error) {
 				now := time.Now()
 				user := domain.User{ID: uuid.New().String(), Email: "user@example.com", Name: "User", Role: "user", Active: true, CreatedAt: now, UpdatedAt: now}
-				callback(user)
+				_ = callback(user)
 			}).
 			Return(nil)
 
@@ -468,7 +468,7 @@ func TestExportService_StreamUsers(t *testing.T) {
 			StreamAll(mock.Anything, mock.Anything).
 			Run(func(ctx context.Context, callback func(domain.User) error) {
 				user := domain.User{ID: "user-1", Email: "user@example.com", Name: "User", Role: "user", Active: true, CreatedAt: now, UpdatedAt: now}
-				callback(user)
+				_ = callback(user)
 			}).
 			Return(nil)
 
@@ -550,7 +550,7 @@ func TestExportService_StreamArticles(t *testing.T) {
 					CreatedAt: now,
 					UpdatedAt: now,
 				}
-				callback(article)
+				_ = callback(article)
 			}).
 			Return(nil)
 

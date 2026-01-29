@@ -18,7 +18,7 @@ type benchUser struct {
 func BenchmarkIsEmail(b *testing.B) {
 	u := &benchUser{Email: "user@example.com", Name: "Test User"}
 	for i := 0; i < b.N; i++ {
-		validation.ValidateStruct(u,
+		_ = validation.ValidateStruct(u,
 			validation.Field(&u.Email, is.Email),
 			validation.Field(&u.Name, validation.Required),
 		)
@@ -28,7 +28,7 @@ func BenchmarkIsEmail(b *testing.B) {
 func BenchmarkRegexEmail(b *testing.B) {
 	u := &benchUser{Email: "user@example.com", Name: "Test User"}
 	for i := 0; i < b.N; i++ {
-		validation.ValidateStruct(u,
+		_ = validation.ValidateStruct(u,
 			validation.Field(&u.Email, validation.Match(benchEmailRegex)),
 			validation.Field(&u.Name, validation.Required),
 		)

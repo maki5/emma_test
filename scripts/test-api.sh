@@ -23,10 +23,53 @@ BLUE='\033[0;34m'
 CYAN='\033[0;36m'
 NC='\033[0m' # No Color
 
-# Timing storage - associative arrays for job processing times
-declare -A IMPORT_TIMES
-declare -A EXPORT_TIMES
-declare -A STREAM_TIMES
+# Timing storage - simple variables (compatible with bash 3.x)
+IMPORT_TIME_USERS="N/A"
+IMPORT_TIME_ARTICLES="N/A"
+IMPORT_TIME_COMMENTS="N/A"
+EXPORT_TIME_USERS_NDJSON="N/A"
+EXPORT_TIME_USERS_CSV="N/A"
+EXPORT_TIME_ARTICLES_NDJSON="N/A"
+EXPORT_TIME_COMMENTS_CSV="N/A"
+STREAM_TIME_USERS_NDJSON="N/A"
+STREAM_TIME_USERS_CSV="N/A"
+STREAM_TIME_ARTICLES_NDJSON="N/A"
+STREAM_TIME_COMMENTS_NDJSON="N/A"
+
+# Helper to set import timing
+set_import_time() {
+    local resource_type="$1"
+    local value="$2"
+    case "$resource_type" in
+        users) IMPORT_TIME_USERS="$value" ;;
+        articles) IMPORT_TIME_ARTICLES="$value" ;;
+        comments) IMPORT_TIME_COMMENTS="$value" ;;
+    esac
+}
+
+# Helper to set export timing
+set_export_time() {
+    local key="$1"
+    local value="$2"
+    case "$key" in
+        users_ndjson) EXPORT_TIME_USERS_NDJSON="$value" ;;
+        users_csv) EXPORT_TIME_USERS_CSV="$value" ;;
+        articles_ndjson) EXPORT_TIME_ARTICLES_NDJSON="$value" ;;
+        comments_csv) EXPORT_TIME_COMMENTS_CSV="$value" ;;
+    esac
+}
+
+# Helper to set stream timing
+set_stream_time() {
+    local key="$1"
+    local value="$2"
+    case "$key" in
+        users_ndjson) STREAM_TIME_USERS_NDJSON="$value" ;;
+        users_csv) STREAM_TIME_USERS_CSV="$value" ;;
+        articles_ndjson) STREAM_TIME_ARTICLES_NDJSON="$value" ;;
+        comments_ndjson) STREAM_TIME_COMMENTS_NDJSON="$value" ;;
+    esac
+}
 
 # Helper functions
 log_info() {
@@ -61,25 +104,25 @@ print_timing_summary() {
     
     # Import Jobs
     echo -e "${CYAN}║${NC} ${YELLOW}IMPORT JOBS${NC}                                                          ${CYAN}║${NC}"
-    echo -e "${CYAN}║${NC}   Users:     ${GREEN}${IMPORT_TIMES[users]:-N/A}${NC}"
-    echo -e "${CYAN}║${NC}   Articles:  ${GREEN}${IMPORT_TIMES[articles]:-N/A}${NC}"
-    echo -e "${CYAN}║${NC}   Comments:  ${GREEN}${IMPORT_TIMES[comments]:-N/A}${NC}"
+    echo -e "${CYAN}║${NC}   Users:     ${GREEN}${IMPORT_TIME_USERS}${NC}"
+    echo -e "${CYAN}║${NC}   Articles:  ${GREEN}${IMPORT_TIME_ARTICLES}${NC}"
+    echo -e "${CYAN}║${NC}   Comments:  ${GREEN}${IMPORT_TIME_COMMENTS}${NC}"
     echo -e "${CYAN}╠══════════════════════════════════════════════════════════════════════╣${NC}"
     
     # Async Export Jobs
     echo -e "${CYAN}║${NC} ${YELLOW}ASYNC EXPORT JOBS${NC}                                                    ${CYAN}║${NC}"
-    echo -e "${CYAN}║${NC}   Users (NDJSON):    ${GREEN}${EXPORT_TIMES[users_ndjson]:-N/A}${NC}"
-    echo -e "${CYAN}║${NC}   Users (CSV):       ${GREEN}${EXPORT_TIMES[users_csv]:-N/A}${NC}"
-    echo -e "${CYAN}║${NC}   Articles (NDJSON): ${GREEN}${EXPORT_TIMES[articles_ndjson]:-N/A}${NC}"
-    echo -e "${CYAN}║${NC}   Comments (CSV):    ${GREEN}${EXPORT_TIMES[comments_csv]:-N/A}${NC}"
+    echo -e "${CYAN}║${NC}   Users (NDJSON):    ${GREEN}${EXPORT_TIME_USERS_NDJSON}${NC}"
+    echo -e "${CYAN}║${NC}   Users (CSV):       ${GREEN}${EXPORT_TIME_USERS_CSV}${NC}"
+    echo -e "${CYAN}║${NC}   Articles (NDJSON): ${GREEN}${EXPORT_TIME_ARTICLES_NDJSON}${NC}"
+    echo -e "${CYAN}║${NC}   Comments (CSV):    ${GREEN}${EXPORT_TIME_COMMENTS_CSV}${NC}"
     echo -e "${CYAN}╠══════════════════════════════════════════════════════════════════════╣${NC}"
     
     # Streaming Export
     echo -e "${CYAN}║${NC} ${YELLOW}STREAMING EXPORT (Direct HTTP)${NC}                                       ${CYAN}║${NC}"
-    echo -e "${CYAN}║${NC}   Users (NDJSON):    ${GREEN}${STREAM_TIMES[users_ndjson]:-N/A}${NC}"
-    echo -e "${CYAN}║${NC}   Users (CSV):       ${GREEN}${STREAM_TIMES[users_csv]:-N/A}${NC}"
-    echo -e "${CYAN}║${NC}   Articles (NDJSON): ${GREEN}${STREAM_TIMES[articles_ndjson]:-N/A}${NC}"
-    echo -e "${CYAN}║${NC}   Comments (NDJSON): ${GREEN}${STREAM_TIMES[comments_ndjson]:-N/A}${NC}"
+    echo -e "${CYAN}║${NC}   Users (NDJSON):    ${GREEN}${STREAM_TIME_USERS_NDJSON}${NC}"
+    echo -e "${CYAN}║${NC}   Users (CSV):       ${GREEN}${STREAM_TIME_USERS_CSV}${NC}"
+    echo -e "${CYAN}║${NC}   Articles (NDJSON): ${GREEN}${STREAM_TIME_ARTICLES_NDJSON}${NC}"
+    echo -e "${CYAN}║${NC}   Comments (NDJSON): ${GREEN}${STREAM_TIME_COMMENTS_NDJSON}${NC}"
     echo -e "${CYAN}╚══════════════════════════════════════════════════════════════════════╝${NC}"
     echo ""
 }
@@ -158,7 +201,7 @@ wait_for_import_job() {
                 log_success "Import job completed in ${elapsed}s (${total} records, ${success} successful)"
                 echo "$response" | jq '.'
                 # Store timing for summary
-                IMPORT_TIMES["$resource_type"]="${elapsed}s (${total} records)"
+                set_import_time "$resource_type" "${elapsed}s (${total} records)"
                 return 0
                 ;;
             "completed_with_errors")
@@ -170,7 +213,7 @@ wait_for_import_job() {
                 echo ""
                 log_warning "Import job completed with errors in ${elapsed}s (${total} records, ${success} success, ${failed} failed)"
                 echo "$response" | jq '.'
-                IMPORT_TIMES["$resource_type"]="${elapsed}s (${total} records, ${failed} errors)"
+                set_import_time "$resource_type" "${elapsed}s (${total} records, ${failed} errors)"
                 return 0
                 ;;
             "failed")
@@ -179,7 +222,7 @@ wait_for_import_job() {
                 echo ""
                 log_error "Import job failed after ${elapsed}s"
                 echo "$response" | jq '.'
-                IMPORT_TIMES["$resource_type"]="FAILED after ${elapsed}s"
+                set_import_time "$resource_type" "FAILED after ${elapsed}s"
                 return 1
                 ;;
             "pending"|"processing")
@@ -202,7 +245,7 @@ wait_for_import_job() {
     
     echo ""
     log_error "Timeout waiting for import job to complete"
-    IMPORT_TIMES["$resource_type"]="TIMEOUT"
+    set_import_time "$resource_type" "TIMEOUT"
     return 1
 }
 
@@ -230,7 +273,7 @@ wait_for_export_job() {
                 log_success "Export job completed in ${elapsed}s (${total} records)"
                 echo "$response" | jq '.'
                 # Store timing for summary
-                EXPORT_TIMES["${resource_type}_${format}"]="${elapsed}s (${total} records)"
+                set_export_time "${resource_type}_${format}" "${elapsed}s (${total} records)"
                 return 0
                 ;;
             "failed")
@@ -239,7 +282,7 @@ wait_for_export_job() {
                 echo ""
                 log_error "Export job failed after ${elapsed}s"
                 echo "$response" | jq '.'
-                EXPORT_TIMES["${resource_type}_${format}"]="FAILED after ${elapsed}s"
+                set_export_time "${resource_type}_${format}" "FAILED after ${elapsed}s"
                 return 1
                 ;;
             "pending"|"processing")
@@ -260,7 +303,7 @@ wait_for_export_job() {
     
     echo ""
     log_error "Timeout waiting for export job to complete"
-    EXPORT_TIMES["${resource_type}_${format}"]="TIMEOUT"
+    set_export_time "${resource_type}_${format}" "TIMEOUT"
     return 1
 }
 
@@ -553,12 +596,12 @@ test_streaming_export_users_ndjson() {
         log_success "Streamed $line_count users in NDJSON format (${elapsed}s)"
         echo "First 3 records:"
         echo "$content" | head -3 | jq '.'
-        STREAM_TIMES["users_ndjson"]="${elapsed}s (${line_count} records)"
+        set_stream_time "users_ndjson" "${elapsed}s (${line_count} records)"
         return 0
     else
         log_error "Streaming export failed (HTTP $http_code)"
         echo "$content"
-        STREAM_TIMES["users_ndjson"]="FAILED"
+        set_stream_time "users_ndjson" "FAILED"
         return 1
     fi
 }
@@ -585,12 +628,12 @@ test_streaming_export_users_csv() {
         log_success "Streamed $line_count lines (including header) in CSV format (${elapsed}s)"
         echo "First 5 lines:"
         echo "$content" | head -5
-        STREAM_TIMES["users_csv"]="${elapsed}s (${line_count} lines)"
+        set_stream_time "users_csv" "${elapsed}s (${line_count} lines)"
         return 0
     else
         log_error "Streaming export failed (HTTP $http_code)"
         echo "$content"
-        STREAM_TIMES["users_csv"]="FAILED"
+        set_stream_time "users_csv" "FAILED"
         return 1
     fi
 }
@@ -617,12 +660,12 @@ test_streaming_export_articles() {
         log_success "Streamed $line_count articles in NDJSON format (${elapsed}s)"
         echo "First 2 records:"
         echo "$content" | head -2 | jq '.'
-        STREAM_TIMES["articles_ndjson"]="${elapsed}s (${line_count} records)"
+        set_stream_time "articles_ndjson" "${elapsed}s (${line_count} records)"
         return 0
     else
         log_error "Streaming export failed (HTTP $http_code)"
         echo "$content"
-        STREAM_TIMES["articles_ndjson"]="FAILED"
+        set_stream_time "articles_ndjson" "FAILED"
         return 1
     fi
 }
@@ -649,12 +692,12 @@ test_streaming_export_comments() {
         log_success "Streamed $line_count comments in NDJSON format (${elapsed}s)"
         echo "First 2 records:"
         echo "$content" | head -2 | jq '.'
-        STREAM_TIMES["comments_ndjson"]="${elapsed}s (${line_count} records)"
+        set_stream_time "comments_ndjson" "${elapsed}s (${line_count} records)"
         return 0
     else
         log_error "Streaming export failed (HTTP $http_code)"
         echo "$content"
-        STREAM_TIMES["comments_ndjson"]="FAILED"
+        set_stream_time "comments_ndjson" "FAILED"
         return 1
     fi
 }

@@ -121,6 +121,33 @@ clean-all: clean db-stop
 	$(DOCKER_COMPOSE) down -v
 
 # =============================================================================
+# Monitoring
+# =============================================================================
+
+## Start Prometheus and Grafana for metrics and dashboards
+monitoring-start:
+	@echo "📊 Starting monitoring stack..."
+	$(DOCKER_COMPOSE) up -d prometheus grafana
+	@echo "✅ Monitoring stack started"
+	@echo "📈 Prometheus: http://localhost:9090"
+	@echo "📊 Grafana: http://localhost:3000 (admin/admin)"
+	@echo "📋 Queries Reference: monitoring/prometheus/queries.md"
+
+## Stop Prometheus and Grafana
+monitoring-stop:
+	@echo "🛑 Stopping monitoring stack..."
+	$(DOCKER_COMPOSE) stop prometheus grafana
+
+## Start everything (DB + monitoring)
+start-all: db-start monitoring-start db-wait migrate-up
+	@echo "✅ All services started"
+	@echo "📍 API: http://localhost:8080 (start with 'make dev' or 'make run')"
+	@echo "📈 Prometheus: http://localhost:9090"
+	@echo "📊 Grafana: http://localhost:3000 (admin/admin)"
+	@echo "📉 Metrics: http://localhost:8080/metrics"
+	@echo "📋 Queries Reference: monitoring/prometheus/queries.md"
+
+# =============================================================================
 # Setup
 # =============================================================================
 

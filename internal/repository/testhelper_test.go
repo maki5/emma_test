@@ -52,7 +52,7 @@ func SetupTestDB(t *testing.T) *TestDB {
 	// Get connection string
 	connStr, err := pgContainer.ConnectionString(ctx, "sslmode=disable")
 	if err != nil {
-		pgContainer.Terminate(ctx)
+		_ = pgContainer.Terminate(ctx)
 		t.Fatalf("Failed to get connection string: %v", err)
 	}
 
@@ -62,12 +62,12 @@ func SetupTestDB(t *testing.T) *TestDB {
 		connStr,
 	)
 	if err != nil {
-		pgContainer.Terminate(ctx)
+		_ = pgContainer.Terminate(ctx)
 		t.Fatalf("Failed to create migrate instance: %v", err)
 	}
 
 	if err := m.Up(); err != nil && err != migrate.ErrNoChange {
-		pgContainer.Terminate(ctx)
+		_ = pgContainer.Terminate(ctx)
 		t.Fatalf("Failed to run migrations: %v", err)
 	}
 	m.Close()
