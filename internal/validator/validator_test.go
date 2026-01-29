@@ -225,7 +225,7 @@ func TestValidateComment(t *testing.T) {
 		{
 			name: "valid comment",
 			comment: &domain.Comment{
-				ID:        "123e4567-e89b-12d3-a456-426614174000",
+				ID:        "cm_123e4567-e89b-12d3-a456-426614174000",
 				Body:      "This is a comment.",
 				ArticleID: "123e4567-e89b-12d3-a456-426614174001",
 				UserID:    "123e4567-e89b-12d3-a456-426614174002",
@@ -235,7 +235,7 @@ func TestValidateComment(t *testing.T) {
 		{
 			name: "missing body",
 			comment: &domain.Comment{
-				ID:        "123e4567-e89b-12d3-a456-426614174000",
+				ID:        "cm_123e4567-e89b-12d3-a456-426614174000",
 				ArticleID: "123e4567-e89b-12d3-a456-426614174001",
 				UserID:    "123e4567-e89b-12d3-a456-426614174002",
 			},
@@ -245,7 +245,7 @@ func TestValidateComment(t *testing.T) {
 		{
 			name: "missing article_id",
 			comment: &domain.Comment{
-				ID:     "123e4567-e89b-12d3-a456-426614174000",
+				ID:     "cm_123e4567-e89b-12d3-a456-426614174000",
 				Body:   "This is a comment.",
 				UserID: "123e4567-e89b-12d3-a456-426614174002",
 			},
@@ -255,7 +255,7 @@ func TestValidateComment(t *testing.T) {
 		{
 			name: "missing user_id",
 			comment: &domain.Comment{
-				ID:        "123e4567-e89b-12d3-a456-426614174000",
+				ID:        "cm_123e4567-e89b-12d3-a456-426614174000",
 				Body:      "This is a comment.",
 				ArticleID: "123e4567-e89b-12d3-a456-426614174001",
 			},
@@ -265,7 +265,7 @@ func TestValidateComment(t *testing.T) {
 		{
 			name: "body exceeds 500 words",
 			comment: &domain.Comment{
-				ID:        "123e4567-e89b-12d3-a456-426614174000",
+				ID:        "cm_123e4567-e89b-12d3-a456-426614174000",
 				Body:      strings.Repeat("word ", 501),
 				ArticleID: "123e4567-e89b-12d3-a456-426614174001",
 				UserID:    "123e4567-e89b-12d3-a456-426614174002",

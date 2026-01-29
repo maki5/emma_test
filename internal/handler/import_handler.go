@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"log"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -94,7 +95,8 @@ func (h *ImportHandler) CreateImport(c *gin.Context) {
 	requestID := middleware.GetRequestID(c)
 	job, err := h.importService.StartImport(c.Request.Context(), resourceType, idempotencyToken, header.Filename, requestID, file)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Printf("[request_id=%s] Failed to start import: %v", requestID, err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to process import request"})
 		return
 	}
 
@@ -113,7 +115,8 @@ func (h *ImportHandler) GetImport(c *gin.Context) {
 
 	job, err := h.importService.GetImportJob(c.Request.Context(), id)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Printf("[request_id=%s] Failed to get import job %s: %v", middleware.GetRequestID(c), id, err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to retrieve import job"})
 		return
 	}
 

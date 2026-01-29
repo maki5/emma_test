@@ -4,50 +4,6 @@ import (
 	"testing"
 )
 
-func TestIsValidRole(t *testing.T) {
-	tests := []struct {
-		role  string
-		valid bool
-	}{
-		{"admin", true},
-		{"user", true},
-		{"moderator", true},
-		{"invalid", false},
-		{"", false},
-		{"ADMIN", false},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.role, func(t *testing.T) {
-			if got := IsValidRole(tt.role); got != tt.valid {
-				t.Errorf("IsValidRole(%q) = %v, want %v", tt.role, got, tt.valid)
-			}
-		})
-	}
-}
-
-func TestIsValidStatus(t *testing.T) {
-	tests := []struct {
-		status string
-		valid  bool
-	}{
-		{"draft", true},
-		{"published", true},
-		{"archived", true},
-		{"invalid", false},
-		{"", false},
-		{"DRAFT", false},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.status, func(t *testing.T) {
-			if got := IsValidStatus(tt.status); got != tt.valid {
-				t.Errorf("IsValidStatus(%q) = %v, want %v", tt.status, got, tt.valid)
-			}
-		})
-	}
-}
-
 func TestIsValidResourceType(t *testing.T) {
 	tests := []struct {
 		resourceType string

@@ -36,17 +36,14 @@ type Config struct {
 
 	// Export configuration
 	ExportDir string
-
-	// Logging configuration
-	LogLevel string
 }
 
 // Load loads configuration from environment variables.
 func Load() (*Config, error) {
 	cfg := &Config{
 		ServerPort:          getEnv("SERVER_PORT", "8080"),
-		ReadTimeout:         getEnvDuration("HTTP_READ_TIMEOUT", 30*time.Second),
-		WriteTimeout:        getEnvDuration("HTTP_WRITE_TIMEOUT", 5*time.Minute),
+		ReadTimeout:         getEnvDuration("HTTP_READ_TIMEOUT", 5*time.Minute),
+		WriteTimeout:        getEnvDuration("HTTP_WRITE_TIMEOUT", 30*time.Minute),
 		IdleTimeout:         getEnvDuration("HTTP_IDLE_TIMEOUT", 120*time.Second),
 		DBHost:              getEnv("DB_HOST", "localhost"),
 		DBPort:              getEnvInt("DB_PORT", 5432),
@@ -62,7 +59,6 @@ func Load() (*Config, error) {
 		WorkerPoolSize:      getEnvInt("WORKER_POOL_SIZE", 4),
 		BatchSize:           getEnvInt("BATCH_SIZE", 1000),
 		ExportDir:           getEnv("EXPORT_DIR", "./exports"),
-		LogLevel:            getEnv("LOG_LEVEL", "info"),
 	}
 
 	if err := cfg.validate(); err != nil {

@@ -1,134 +1,152 @@
-.PHONY: all build run test clean docker-up docker-down migrate-up migrate-down lint fmt
+.PHONY: all build run dev test clean lint fmt help
 
 # Variables
 BINARY_NAME=server
 DOCKER_COMPOSE=docker compose
 GO=go
-GOTEST=$(GO) test
-GOVET=$(GO) vet
+DB_URL=postgres://postgres:postgres@localhost:5432/bulk_import_export?sslmode=disable
 
-# Default target
-all: build
+# =============================================================================
+# Main Targets
+# =============================================================================
 
-# Build the application
+## Build the application
 build:
+	@echo "🔨 Building..."
 	$(GO) build -o bin/$(BINARY_NAME) ./cmd/server
 
-# Run the application locally
+## Start everything for local development (DB + migrations + app with logs)
+dev: db-start db-wait migrate-up
+	@echo "🚀 Starting application..."
+	@echo "📍 API: http://localhost:8080"
+	@echo "❤️  Health: http://localhost:8080/health"
+	@echo ""
+	$(GO) run ./cmd/server
+
+## Run the application (without starting DB)
 run: build
 	./bin/$(BINARY_NAME)
 
-# Run with hot reload (requires air)
-dev:
-	air
+## Run API tests (requires running server)
+test-api:
+	@echo "🧪 Running API tests..."
+	./scripts/test-api.sh
 
-# Run all tests
+# =============================================================================
+# Database
+# =============================================================================
+
+## Start PostgreSQL in Docker
+db-start:
+	@echo "🐳 Starting PostgreSQL..."
+	$(DOCKER_COMPOSE) up -d postgres
+	@echo "✅ PostgreSQL container started"
+
+## Wait for database to be ready
+db-wait:
+	@echo "⏳ Waiting for PostgreSQL..."
+	@until $(DOCKER_COMPOSE) exec -T postgres pg_isready -U postgres > /dev/null 2>&1; do sleep 1; done
+	@echo "✅ PostgreSQL is ready"
+
+## Stop PostgreSQL
+db-stop:
+	@echo "🛑 Stopping PostgreSQL..."
+	$(DOCKER_COMPOSE) down
+
+## Run database migrations
+migrate-up:
+	@echo "🗄️  Running migrations..."
+	migrate -path ./migrations -database "$(DB_URL)" up
+
+## Rollback database migrations
+migrate-down:
+	@echo "🗄️  Rolling back migrations..."
+	migrate -path ./migrations -database "$(DB_URL)" down
+
+## Open database shell
+db-shell:
+	$(DOCKER_COMPOSE) exec postgres psql -U postgres -d bulk_import_export
+
+## Reset database (destroy and recreate)
+db-reset: db-stop
+	@echo "🔄 Resetting database..."
+	$(DOCKER_COMPOSE) down -v
+	$(MAKE) db-start db-wait migrate-up
+
+# =============================================================================
+# Testing
+# =============================================================================
+
+## Run all unit tests
 test:
-	$(GOTEST) -v -race -cover ./...
+	$(GO) test -v -race -cover ./...
 
-# Run tests with coverage report
+## Run tests with coverage report
 test-coverage:
-	$(GOTEST) -v -race -coverprofile=coverage.out ./...
+	$(GO) test -v -race -coverprofile=coverage.out ./...
 	$(GO) tool cover -html=coverage.out -o coverage.html
+	@echo "📊 Coverage report: coverage.html"
 
-# Run unit tests only
-test-unit:
-	$(GOTEST) -v -short ./...
+# =============================================================================
+# Code Quality
+# =============================================================================
 
-# Run integration tests
-test-integration:
-	$(GOTEST) -v -run Integration ./...
+## Format code
+fmt:
+	$(GO) fmt ./...
 
-# Clean build artifacts
+## Run linter
+lint:
+	golangci-lint run ./...
+
+## Run go vet
+vet:
+	$(GO) vet ./...
+
+## Generate mocks
+mocks:
+	mockery
+
+# =============================================================================
+# Cleanup
+# =============================================================================
+
+## Clean build artifacts
 clean:
 	rm -rf bin/
 	rm -f coverage.out coverage.html
 
-# Format code
-fmt:
-	$(GO) fmt ./...
+## Clean everything (including Docker volumes)
+clean-all: clean db-stop
+	$(DOCKER_COMPOSE) down -v
 
-# Lint code
-lint:
-	golangci-lint run ./...
+# =============================================================================
+# Setup
+# =============================================================================
 
-# Vet code
-vet:
-	$(GOVET) ./...
-
-# Download dependencies
+## Download dependencies
 deps:
 	$(GO) mod download
 	$(GO) mod tidy
 
-# Generate mocks
-mocks:
-	mockery --all --keeptree --output=internal/mocks
-
-# Docker commands
-docker-build:
-	docker build -t bulk-import-export:latest .
-
-docker-up:
-	$(DOCKER_COMPOSE) up -d
-
-docker-down:
-	$(DOCKER_COMPOSE) down
-
-docker-logs:
-	$(DOCKER_COMPOSE) logs -f
-
-docker-restart:
-	$(DOCKER_COMPOSE) restart
-
-# Database migration commands
-migrate-up:
-	migrate -path ./migrations -database "postgres://postgres:postgres@localhost:5432/bulk_import_export?sslmode=disable" up
-
-migrate-down:
-	migrate -path ./migrations -database "postgres://postgres:postgres@localhost:5432/bulk_import_export?sslmode=disable" down
-
-migrate-create:
-	@read -p "Enter migration name: " name; \
-	migrate create -ext sql -dir ./migrations -seq $$name
-
-# Database commands
-db-shell:
-	docker exec -it $$(docker ps -qf "name=postgres") psql -U postgres -d bulk_import_export
-
-db-reset:
-	$(DOCKER_COMPOSE) down -v
-	$(DOCKER_COMPOSE) up -d postgres
-	sleep 3
-	$(DOCKER_COMPOSE) up migrate
-
-# Install development tools
+## Install development tools
 install-tools:
 	go install github.com/air-verse/air@latest
 	go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
 	go install github.com/vektra/mockery/v2@latest
 	go install -tags 'postgres' github.com/golang-migrate/migrate/v4/cmd/migrate@latest
 
+# =============================================================================
 # Help
+# =============================================================================
+
+## Show this help
 help:
+	@echo "Bulk Import/Export API - Development Commands"
+	@echo ""
+	@echo "Quick Start:"
+	@echo "  make dev        - Start DB, run migrations, and start app with logs"
+	@echo "  make test-api   - Run API integration tests (requires running server)"
+	@echo ""
 	@echo "Available targets:"
-	@echo "  build           - Build the application"
-	@echo "  run             - Build and run the application"
-	@echo "  dev             - Run with hot reload (requires air)"
-	@echo "  test            - Run all tests"
-	@echo "  test-coverage   - Run tests with coverage report"
-	@echo "  test-unit       - Run unit tests only"
-	@echo "  test-integration - Run integration tests"
-	@echo "  clean           - Clean build artifacts"
-	@echo "  fmt             - Format code"
-	@echo "  lint            - Lint code"
-	@echo "  deps            - Download dependencies"
-	@echo "  mocks           - Generate mocks"
-	@echo "  docker-build    - Build Docker image"
-	@echo "  docker-up       - Start services with Docker Compose"
-	@echo "  docker-down     - Stop services"
-	@echo "  migrate-up      - Run database migrations"
-	@echo "  migrate-down    - Rollback database migrations"
-	@echo "  db-shell        - Open database shell"
-	@echo "  db-reset        - Reset database"
-	@echo "  install-tools   - Install development tools"
+	@grep -E '^## ' $(MAKEFILE_LIST) | sed 's/## /  /' | head -30

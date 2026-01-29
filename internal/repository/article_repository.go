@@ -5,9 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"strings"
 
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"bulk-import-export/internal/domain"
@@ -25,10 +25,15 @@ func NewPostgresArticleRepository(pool *pgxpool.Pool) *PostgresArticleRepository
 
 // BulkInsert inserts articles in bulk using CTE with FK validation.
 func (r *PostgresArticleRepository) BulkInsert(ctx context.Context, articles []domain.Article) domain.BatchResult {
+	// Pre-allocate errors slice to avoid expensive reallocations
+	estimatedErrors := len(articles) / 10 // ~10% error rate estimate
+	if estimatedErrors < 10 {
+		estimatedErrors = 10
+	}
 	result := domain.BatchResult{
 		SuccessCount: 0,
 		FailedCount:  0,
-		Errors:       []domain.RecordError{},
+		Errors:       make([]domain.RecordError, 0, estimatedErrors),
 	}
 
 	if len(articles) == 0 {
@@ -78,6 +83,13 @@ func (r *PostgresArticleRepository) BulkInsert(ctx context.Context, articles []d
 		var errorMsg *string
 
 		if err := rows.Scan(&rowNum, &success, &errorMsg); err != nil {
+			log.Printf("[article_repository] Failed to scan bulk insert result row: %v", err)
+			result.FailedCount++
+			result.Errors = append(result.Errors, domain.RecordError{
+				Row:    0,
+				Field:  "database",
+				Reason: fmt.Sprintf("scan error: %v", err),
+			})
 			continue
 		}
 
@@ -142,14 +154,15 @@ func (r *PostgresArticleRepository) buildBulkInsertQuery(articles []domain.Artic
 
 		values = append(values, fmt.Sprintf("($%d, $%d, $%d, $%d, $%d, $%d, $%d, $%d, $%d)",
 			argNum, argNum+1, argNum+2, argNum+3, argNum+4, argNum+5, argNum+6, argNum+7, argNum+8))
-		args = append(args, a.ID, a.Slug, a.Title, desc, a.Body, tagsJSON, a.AuthorID, a.Status, i+1)
+		args = append(args, a.ID, a.Slug, a.Title, desc, a.Body, tagsJSON, a.AuthorID, a.Status, fmt.Sprintf("%d", i+1))
 		argNum += 9
 	}
 
 	// The query tracks actual insertions via LEFT JOIN to detect concurrent duplicates
 	query := fmt.Sprintf(`
 WITH input_data AS (
-    SELECT * FROM (VALUES %s) AS t(id, slug, title, description, body, tags, author_id, status, row_num)
+    SELECT id, slug, title, description, body, tags, author_id, status, row_num::integer AS row_num
+    FROM (VALUES %s) AS t(id, slug, title, description, body, tags, author_id, status, row_num)
 ),
 valid_authors AS (
     SELECT id FROM users WHERE id IN (SELECT author_id::uuid FROM input_data)
@@ -232,33 +245,4 @@ func (r *PostgresArticleRepository) StreamAll(ctx context.Context, callback func
 	}
 
 	return rows.Err()
-}
-
-// Count returns the total number of articles.
-func (r *PostgresArticleRepository) Count(ctx context.Context) (int64, error) {
-	var count int64
-	err := r.pool.QueryRow(ctx, "SELECT COUNT(*) FROM articles").Scan(&count)
-	if err != nil {
-		return 0, fmt.Errorf("count articles: %w", err)
-	}
-	return count, nil
-}
-
-// GetBySlug finds an article by slug.
-func (r *PostgresArticleRepository) GetBySlug(ctx context.Context, slug string) (*domain.Article, error) {
-	var a domain.Article
-	err := r.pool.QueryRow(ctx, `
-		SELECT id, slug, title, description, body, tags, author_id, status, published_at, created_at, updated_at
-		FROM articles
-		WHERE slug = $1
-	`, slug).Scan(&a.ID, &a.Slug, &a.Title, &a.Description, &a.Body, &a.Tags, &a.AuthorID, &a.Status, &a.PublishedAt, &a.CreatedAt, &a.UpdatedAt)
-
-	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, fmt.Errorf("get article by slug: %w", err)
-	}
-
-	return &a, nil
 }

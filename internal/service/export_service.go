@@ -1,6 +1,7 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"encoding/csv"
 	"encoding/json"
@@ -39,6 +40,8 @@ type ExportService struct {
 	jobQueue chan exportTask
 	stopChan chan struct{}
 	wg       sync.WaitGroup
+	closed   bool
+	mu       sync.RWMutex
 }
 
 type exportTask struct {
@@ -97,6 +100,10 @@ func (s *ExportService) worker() {
 
 // Close shuts down the worker pool immediately.
 func (s *ExportService) Close() {
+	s.mu.Lock()
+	s.closed = true
+	s.mu.Unlock()
+
 	close(s.stopChan)
 	close(s.jobQueue)
 	s.wg.Wait()
@@ -131,15 +138,33 @@ func (s *ExportService) StartExport(ctx context.Context, resourceType, format, i
 		return nil, fmt.Errorf("create export job: %w", err)
 	}
 
+	// Check if service is shutting down
+	s.mu.RLock()
+	if s.closed {
+		s.mu.RUnlock()
+		return nil, fmt.Errorf("export service is shutting down")
+	}
+	s.mu.RUnlock()
+
 	// Send to queue with timeout to prevent blocking
 	select {
 	case s.jobQueue <- exportTask{job: job, requestID: requestID}:
 		log.Printf("[request_id=%s] Job %s queued for processing", requestID, job.ID)
 	case <-time.After(ExportQueueSendTimeout):
 		log.Printf("[request_id=%s] Warning: queue full, job %s will be processed when capacity available", requestID, job.ID)
-		// Still try to send, but don't block indefinitely
+		// Try to send in a goroutine, but check if closed first
 		go func() {
-			s.jobQueue <- exportTask{job: job, requestID: requestID}
+			s.mu.RLock()
+			if s.closed {
+				s.mu.RUnlock()
+				return
+			}
+			s.mu.RUnlock()
+
+			select {
+			case s.jobQueue <- exportTask{job: job, requestID: requestID}:
+			case <-s.stopChan:
+			}
 		}()
 	}
 
@@ -152,8 +177,9 @@ func (s *ExportService) processExport(task exportTask) {
 
 	job := task.job
 	requestID := task.requestID
+	startTime := time.Now()
 
-	log.Printf("[request_id=%s] Processing export job %s", requestID, job.ID)
+	log.Printf("[request_id=%s] Processing export job %s: resource_type=%s, format=%s", requestID, job.ID, job.ResourceType, job.Format)
 
 	job.Status = domain.JobStatusProcessing
 	job.UpdatedAt = time.Now()
@@ -201,8 +227,9 @@ func (s *ExportService) processExport(task exportTask) {
 		log.Printf("[request_id=%s] Failed to update export job: %v", requestID, err)
 	}
 
-	log.Printf("[request_id=%s] Export job %s completed: status=%s, total=%d",
-		requestID, job.ID, job.Status, job.TotalRecords)
+	elapsed := time.Since(startTime)
+	log.Printf("[request_id=%s] Export job %s completed: status=%s, total=%d, elapsed=%s",
+		requestID, job.ID, job.Status, job.TotalRecords, elapsed.Round(time.Millisecond))
 }
 
 func (s *ExportService) exportUsers(ctx context.Context, job *domain.ExportJob) (string, int, error) {
@@ -218,16 +245,30 @@ func (s *ExportService) exportUsers(ctx context.Context, job *domain.ExportJob) 
 	if err != nil {
 		return "", 0, fmt.Errorf("create file: %w", err)
 	}
-	defer file.Close()
+
+	var exportErr error
+	defer func() {
+		// Sync to ensure data is flushed to disk
+		if syncErr := file.Sync(); syncErr != nil && exportErr == nil {
+			log.Printf("[export] Warning: failed to sync file %s: %v", filePath, syncErr)
+		}
+		file.Close()
+		// Clean up partial file on error
+		if exportErr != nil {
+			if removeErr := os.Remove(filePath); removeErr != nil {
+				log.Printf("[export] Warning: failed to remove partial file %s: %v", filePath, removeErr)
+			}
+		}
+	}()
 
 	var count int
 
 	if job.Format == "csv" {
 		writer := csv.NewWriter(file)
-		defer writer.Flush()
 
 		if err := writer.Write([]string{"id", "email", "name", "role", "is_active", "created_at", "updated_at"}); err != nil {
-			return "", 0, fmt.Errorf("write header: %w", err)
+			exportErr = fmt.Errorf("write header: %w", err)
+			return "", 0, exportErr
 		}
 
 		err = s.userRepo.StreamAll(ctx, func(user domain.User) error {
@@ -246,6 +287,18 @@ func (s *ExportService) exportUsers(ctx context.Context, job *domain.ExportJob) 
 			count++
 			return nil
 		})
+
+		if err != nil {
+			exportErr = fmt.Errorf("stream users: %w", err)
+			return "", 0, exportErr
+		}
+
+		// Flush and check for errors
+		writer.Flush()
+		if err := writer.Error(); err != nil {
+			exportErr = fmt.Errorf("flush csv writer: %w", err)
+			return "", 0, exportErr
+		}
 	} else {
 		encoder := json.NewEncoder(file)
 
@@ -256,10 +309,11 @@ func (s *ExportService) exportUsers(ctx context.Context, job *domain.ExportJob) 
 			count++
 			return nil
 		})
-	}
 
-	if err != nil {
-		return "", 0, fmt.Errorf("stream users: %w", err)
+		if err != nil {
+			exportErr = fmt.Errorf("stream users: %w", err)
+			return "", 0, exportErr
+		}
 	}
 
 	return filePath, count, nil
@@ -278,16 +332,28 @@ func (s *ExportService) exportArticles(ctx context.Context, job *domain.ExportJo
 	if err != nil {
 		return "", 0, fmt.Errorf("create file: %w", err)
 	}
-	defer file.Close()
+
+	var exportErr error
+	defer func() {
+		if syncErr := file.Sync(); syncErr != nil && exportErr == nil {
+			log.Printf("[export] Warning: failed to sync file %s: %v", filePath, syncErr)
+		}
+		file.Close()
+		if exportErr != nil {
+			if removeErr := os.Remove(filePath); removeErr != nil {
+				log.Printf("[export] Warning: failed to remove partial file %s: %v", filePath, removeErr)
+			}
+		}
+	}()
 
 	var count int
 
 	if job.Format == "csv" {
 		writer := csv.NewWriter(file)
-		defer writer.Flush()
 
 		if err := writer.Write([]string{"id", "title", "slug", "body", "author_id", "status", "published_at", "created_at", "updated_at"}); err != nil {
-			return "", 0, fmt.Errorf("write header: %w", err)
+			exportErr = fmt.Errorf("write header: %w", err)
+			return "", 0, exportErr
 		}
 
 		err = s.articleRepo.StreamAll(ctx, func(article domain.Article) error {
@@ -313,6 +379,17 @@ func (s *ExportService) exportArticles(ctx context.Context, job *domain.ExportJo
 			count++
 			return nil
 		})
+
+		if err != nil {
+			exportErr = fmt.Errorf("stream articles: %w", err)
+			return "", 0, exportErr
+		}
+
+		writer.Flush()
+		if err := writer.Error(); err != nil {
+			exportErr = fmt.Errorf("flush csv writer: %w", err)
+			return "", 0, exportErr
+		}
 	} else {
 		encoder := json.NewEncoder(file)
 
@@ -323,10 +400,11 @@ func (s *ExportService) exportArticles(ctx context.Context, job *domain.ExportJo
 			count++
 			return nil
 		})
-	}
 
-	if err != nil {
-		return "", 0, fmt.Errorf("stream articles: %w", err)
+		if err != nil {
+			exportErr = fmt.Errorf("stream articles: %w", err)
+			return "", 0, exportErr
+		}
 	}
 
 	return filePath, count, nil
@@ -345,21 +423,35 @@ func (s *ExportService) exportComments(ctx context.Context, job *domain.ExportJo
 	if err != nil {
 		return "", 0, fmt.Errorf("create file: %w", err)
 	}
-	defer file.Close()
+
+	var exportErr error
+	defer func() {
+		if syncErr := file.Sync(); syncErr != nil && exportErr == nil {
+			log.Printf("[export] Warning: failed to sync file %s: %v", filePath, syncErr)
+		}
+		file.Close()
+		if exportErr != nil {
+			if removeErr := os.Remove(filePath); removeErr != nil {
+				log.Printf("[export] Warning: failed to remove partial file %s: %v", filePath, removeErr)
+			}
+		}
+	}()
 
 	var count int
 
 	if job.Format == "csv" {
 		writer := csv.NewWriter(file)
-		defer writer.Flush()
 
 		if err := writer.Write([]string{"id", "article_id", "user_id", "body", "created_at"}); err != nil {
-			return "", 0, fmt.Errorf("write header: %w", err)
+			exportErr = fmt.Errorf("write header: %w", err)
+			return "", 0, exportErr
 		}
 
 		err = s.commentRepo.StreamAll(ctx, func(comment domain.Comment) error {
+			// Add cm_ prefix back to comment ID for export
+			exportID := "cm_" + comment.ID
 			record := []string{
-				comment.ID,
+				exportID,
 				comment.ArticleID,
 				comment.UserID,
 				comment.Body,
@@ -371,20 +463,34 @@ func (s *ExportService) exportComments(ctx context.Context, job *domain.ExportJo
 			count++
 			return nil
 		})
+
+		if err != nil {
+			exportErr = fmt.Errorf("stream comments: %w", err)
+			return "", 0, exportErr
+		}
+
+		writer.Flush()
+		if err := writer.Error(); err != nil {
+			exportErr = fmt.Errorf("flush csv writer: %w", err)
+			return "", 0, exportErr
+		}
 	} else {
 		encoder := json.NewEncoder(file)
 
 		err = s.commentRepo.StreamAll(ctx, func(comment domain.Comment) error {
+			// Add cm_ prefix back to comment ID for export
+			comment.ID = "cm_" + comment.ID
 			if err := encoder.Encode(comment); err != nil {
 				return fmt.Errorf("write json: %w", err)
 			}
 			count++
 			return nil
 		})
-	}
 
-	if err != nil {
-		return "", 0, fmt.Errorf("stream comments: %w", err)
+		if err != nil {
+			exportErr = fmt.Errorf("stream comments: %w", err)
+			return "", 0, exportErr
+		}
 	}
 
 	return filePath, count, nil
@@ -406,10 +512,20 @@ func (s *ExportService) StreamUsers(ctx context.Context, format string, writer S
 		}
 
 		err := s.userRepo.StreamAll(ctx, func(user domain.User) error {
-			line := fmt.Sprintf("%s,%s,%s,%s,%v,%s,%s\n",
-				user.ID, user.Email, user.Name, user.Role, user.Active,
-				user.CreatedAt.Format(time.RFC3339), user.UpdatedAt.Format(time.RFC3339))
-			if err := writer.Write([]byte(line)); err != nil {
+			// Use csv.Writer to properly escape fields
+			var buf bytes.Buffer
+			csvWriter := csv.NewWriter(&buf)
+			record := []string{
+				user.ID, user.Email, user.Name, user.Role,
+				fmt.Sprintf("%v", user.Active),
+				user.CreatedAt.Format(time.RFC3339),
+				user.UpdatedAt.Format(time.RFC3339),
+			}
+			if err := csvWriter.Write(record); err != nil {
+				return fmt.Errorf("encode csv: %w", err)
+			}
+			csvWriter.Flush()
+			if err := writer.Write(buf.Bytes()); err != nil {
 				return fmt.Errorf("write row: %w", err)
 			}
 			count++
@@ -454,11 +570,19 @@ func (s *ExportService) StreamArticles(ctx context.Context, format string, write
 			if article.PublishedAt != nil {
 				publishedAt = article.PublishedAt.Format(time.RFC3339)
 			}
-			line := fmt.Sprintf("%s,%s,%s,%s,%s,%s,%s,%s,%s\n",
+			// Use csv.Writer to properly escape fields
+			var buf bytes.Buffer
+			csvWriter := csv.NewWriter(&buf)
+			record := []string{
 				article.ID, article.Title, article.Slug, article.Body, article.AuthorID,
 				article.Status, publishedAt,
-				article.CreatedAt.Format(time.RFC3339), article.UpdatedAt.Format(time.RFC3339))
-			if err := writer.Write([]byte(line)); err != nil {
+				article.CreatedAt.Format(time.RFC3339), article.UpdatedAt.Format(time.RFC3339),
+			}
+			if err := csvWriter.Write(record); err != nil {
+				return fmt.Errorf("encode csv: %w", err)
+			}
+			csvWriter.Flush()
+			if err := writer.Write(buf.Bytes()); err != nil {
 				return fmt.Errorf("write row: %w", err)
 			}
 			count++
@@ -499,10 +623,20 @@ func (s *ExportService) StreamComments(ctx context.Context, format string, write
 		}
 
 		err := s.commentRepo.StreamAll(ctx, func(comment domain.Comment) error {
-			line := fmt.Sprintf("%s,%s,%s,%s,%s\n",
-				comment.ID, comment.ArticleID, comment.UserID, comment.Body,
-				comment.CreatedAt.Format(time.RFC3339))
-			if err := writer.Write([]byte(line)); err != nil {
+			// Add cm_ prefix back to comment ID for export
+			exportID := "cm_" + comment.ID
+			// Use csv.Writer to properly escape fields
+			var buf bytes.Buffer
+			csvWriter := csv.NewWriter(&buf)
+			record := []string{
+				exportID, comment.ArticleID, comment.UserID, comment.Body,
+				comment.CreatedAt.Format(time.RFC3339),
+			}
+			if err := csvWriter.Write(record); err != nil {
+				return fmt.Errorf("encode csv: %w", err)
+			}
+			csvWriter.Flush()
+			if err := writer.Write(buf.Bytes()); err != nil {
 				return fmt.Errorf("write row: %w", err)
 			}
 			count++
@@ -513,6 +647,8 @@ func (s *ExportService) StreamComments(ctx context.Context, format string, write
 		}
 	} else {
 		err := s.commentRepo.StreamAll(ctx, func(comment domain.Comment) error {
+			// Add cm_ prefix back to comment ID for export
+			comment.ID = "cm_" + comment.ID
 			data, err := json.Marshal(comment)
 			if err != nil {
 				return fmt.Errorf("marshal comment: %w", err)

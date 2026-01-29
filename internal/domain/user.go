@@ -14,14 +14,5 @@ type User struct {
 }
 
 // ValidRoles contains all valid user roles.
+// This is the single source of truth for role validation across the application.
 var ValidRoles = []string{"admin", "user", "moderator"}
-
-// IsValidRole checks if a role is valid.
-func IsValidRole(role string) bool {
-	for _, r := range ValidRoles {
-		if r == role {
-			return true
-		}
-	}
-	return false
-}

@@ -5,16 +5,41 @@ import (
 	"strings"
 
 	validation "github.com/go-ozzo/ozzo-validation/v4"
-	"github.com/go-ozzo/ozzo-validation/v4/is"
 
 	"bulk-import-export/internal/domain"
 )
 
 var (
 	slugRegex   = regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*$`)
-	validRoles  = []interface{}{"admin", "user", "moderator"}
-	validStatus = []interface{}{"draft", "published", "archived"}
+	// Simple email regex - fast and avoids catastrophic backtracking
+	// Matches: local@domain.tld format (at least 2 char TLD required)
+	emailRegex  = regexp.MustCompile(`^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$`)
+	// UUID format regex (standard UUID without prefix)
+	uuidRegex   = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
+	// Comment ID regex: allows cm_ prefix followed by UUID
+	commentIDRegex = regexp.MustCompile(`^cm_[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
+	// Pre-computed slices/maps for O(1) lookups using domain as source of truth
+	validStatus   = buildValidStatusSlice()
+	validRolesMap = buildValidRolesMap()
 )
+
+// buildValidRolesMap creates a map from domain.ValidRoles for O(1) lookups
+func buildValidRolesMap() map[string]bool {
+	m := make(map[string]bool, len(domain.ValidRoles))
+	for _, role := range domain.ValidRoles {
+		m[role] = true
+	}
+	return m
+}
+
+// buildValidStatusSlice creates an interface slice from domain.ValidStatuses for ozzo-validation
+func buildValidStatusSlice() []interface{} {
+	s := make([]interface{}, len(domain.ValidStatuses))
+	for i, status := range domain.ValidStatuses {
+		s[i] = status
+	}
+	return s
+}
 
 // Validator provides validation methods for domain entities.
 type Validator struct{}
@@ -25,18 +50,28 @@ func NewValidator() *Validator {
 }
 
 // ValidateUser validates a User entity.
+// Optimized to use direct map lookup for role validation instead of ozzo In() rule.
 func (v *Validator) ValidateUser(u *domain.User) error {
+	// Fast path: check role first with map lookup (O(1) instead of O(n))
+	if u.Role == "" {
+		return validation.Errors{"role": validation.NewError("role_required", "role_required")}
+	}
+	if !validRolesMap[u.Role] {
+		return validation.Errors{"role": validation.NewError("invalid_role", "invalid_role")}
+	}
+
+	// Now validate remaining fields
 	return validation.ValidateStruct(u,
+		validation.Field(&u.ID,
+			validation.Required.Error("id_required"),
+			validation.Match(uuidRegex).Error("invalid_id_format"),
+		),
 		validation.Field(&u.Email,
 			validation.Required.Error("email_required"),
-			is.Email.Error("invalid_email_format"),
+			validation.Match(emailRegex).Error("invalid_email_format"),
 		),
 		validation.Field(&u.Name,
 			validation.Required.Error("name_required"),
-		),
-		validation.Field(&u.Role,
-			validation.Required.Error("role_required"),
-			validation.In(validRoles...).Error("invalid_role"),
 		),
 	)
 }
@@ -44,6 +79,10 @@ func (v *Validator) ValidateUser(u *domain.User) error {
 // ValidateArticle validates an Article entity.
 func (v *Validator) ValidateArticle(a *domain.Article) error {
 	err := validation.ValidateStruct(a,
+		validation.Field(&a.ID,
+			validation.Required.Error("id_required"),
+			validation.Match(uuidRegex).Error("invalid_id_format"),
+		),
 		validation.Field(&a.Slug,
 			validation.Required.Error("slug_required"),
 			validation.Match(slugRegex).Error("invalid_slug_format"),
@@ -56,6 +95,7 @@ func (v *Validator) ValidateArticle(a *domain.Article) error {
 		),
 		validation.Field(&a.AuthorID,
 			validation.Required.Error("author_id_required"),
+			validation.Match(uuidRegex).Error("invalid_author_id_format"),
 		),
 		validation.Field(&a.Status,
 			validation.Required.Error("status_required"),
@@ -86,15 +126,21 @@ func (v *Validator) ValidateArticle(a *domain.Article) error {
 // ValidateComment validates a Comment entity.
 func (v *Validator) ValidateComment(c *domain.Comment) error {
 	return validation.ValidateStruct(c,
+		validation.Field(&c.ID,
+			validation.Required.Error("id_required"),
+			validation.Match(commentIDRegex).Error("invalid_id_format"),
+		),
 		validation.Field(&c.Body,
 			validation.Required.Error("body_required"),
 			validation.By(wordCountRule(500)),
 		),
 		validation.Field(&c.ArticleID,
 			validation.Required.Error("article_id_required"),
+			validation.Match(uuidRegex).Error("invalid_article_id_format"),
 		),
 		validation.Field(&c.UserID,
 			validation.Required.Error("user_id_required"),
+			validation.Match(uuidRegex).Error("invalid_user_id_format"),
 		),
 	)
 }
@@ -135,4 +181,24 @@ func ConvertValidationErrors(rowNum int, err error) []domain.RecordError {
 	}
 
 	return errors
+}
+
+// AppendValidationErrors appends validation errors directly to the target slice.
+// This is more efficient than ConvertValidationErrors as it avoids slice spread copies.
+func AppendValidationErrors(target *[]domain.RecordError, rowNum int, err error) {
+	if ve, ok := err.(validation.Errors); ok {
+		for field, fieldErr := range ve {
+			*target = append(*target, domain.RecordError{
+				Row:    rowNum,
+				Field:  field,
+				Reason: fieldErr.Error(),
+			})
+		}
+	} else if err != nil {
+		*target = append(*target, domain.RecordError{
+			Row:    rowNum,
+			Field:  "unknown",
+			Reason: err.Error(),
+		})
+	}
 }

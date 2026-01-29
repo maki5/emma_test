@@ -72,6 +72,30 @@ check_health() {
     fi
 }
 
+reset_database() {
+    log_header "Resetting Database"
+    log_info "Truncating all tables for clean test run..."
+    
+    # Use docker compose to run psql and truncate tables
+    # Order matters due to FK constraints - truncate in reverse dependency order
+    local result
+    result=$(docker compose exec -T postgres psql -U postgres -d bulk_import_export -c "
+        TRUNCATE TABLE comments CASCADE;
+        TRUNCATE TABLE articles CASCADE;
+        TRUNCATE TABLE users CASCADE;
+        TRUNCATE TABLE import_jobs CASCADE;
+        TRUNCATE TABLE export_jobs CASCADE;
+    " 2>&1)
+    
+    if [ $? -eq 0 ]; then
+        log_success "Database reset complete - all tables truncated"
+        return 0
+    else
+        log_error "Failed to reset database: $result"
+        return 1
+    fi
+}
+
 wait_for_import_job() {
     local job_id="$1"
     local max_attempts="${2:-60}"
@@ -643,6 +667,12 @@ main() {
     
     if ! check_health; then
         log_error "Server is not available. Please start the server first."
+        exit 1
+    fi
+    
+    # Reset database for clean test run
+    if ! reset_database; then
+        log_error "Failed to reset database. Exiting."
         exit 1
     fi
     

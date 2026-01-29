@@ -4,9 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"strings"
 
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"bulk-import-export/internal/domain"
@@ -24,10 +24,15 @@ func NewPostgresCommentRepository(pool *pgxpool.Pool) *PostgresCommentRepository
 
 // BulkInsert inserts comments in bulk using CTE with FK validation.
 func (r *PostgresCommentRepository) BulkInsert(ctx context.Context, comments []domain.Comment) domain.BatchResult {
+	// Pre-allocate errors slice to avoid expensive reallocations
+	estimatedErrors := len(comments) / 10 // ~10% error rate estimate
+	if estimatedErrors < 10 {
+		estimatedErrors = 10
+	}
 	result := domain.BatchResult{
 		SuccessCount: 0,
 		FailedCount:  0,
-		Errors:       []domain.RecordError{},
+		Errors:       make([]domain.RecordError, 0, estimatedErrors),
 	}
 
 	if len(comments) == 0 {
@@ -77,6 +82,13 @@ func (r *PostgresCommentRepository) BulkInsert(ctx context.Context, comments []d
 		var errorMsg *string
 
 		if err := rows.Scan(&rowNum, &success, &errorMsg); err != nil {
+			log.Printf("[comment_repository] Failed to scan bulk insert result row: %v", err)
+			result.FailedCount++
+			result.Errors = append(result.Errors, domain.RecordError{
+				Row:    0,
+				Field:  "database",
+				Reason: fmt.Sprintf("scan error: %v", err),
+			})
 			continue
 		}
 
@@ -130,14 +142,15 @@ func (r *PostgresCommentRepository) buildBulkInsertQuery(comments []domain.Comme
 	for i, c := range comments {
 		values = append(values, fmt.Sprintf("($%d, $%d, $%d, $%d, $%d)",
 			argNum, argNum+1, argNum+2, argNum+3, argNum+4))
-		args = append(args, c.ID, c.Body, c.ArticleID, c.UserID, i+1)
+		args = append(args, c.ID, c.Body, c.ArticleID, c.UserID, fmt.Sprintf("%d", i+1))
 		argNum += 5
 	}
 
 	// The query tracks actual insertions via LEFT JOIN to detect concurrent issues
 	query := fmt.Sprintf(`
 WITH input_data AS (
-    SELECT * FROM (VALUES %s) AS t(id, body, article_id, user_id, row_num)
+    SELECT id, body, article_id, user_id, row_num::integer AS row_num
+    FROM (VALUES %s) AS t(id, body, article_id, user_id, row_num)
 ),
 valid_articles AS (
     SELECT id FROM articles WHERE id IN (SELECT article_id::uuid FROM input_data)
@@ -210,33 +223,4 @@ func (r *PostgresCommentRepository) StreamAll(ctx context.Context, callback func
 	}
 
 	return rows.Err()
-}
-
-// Count returns the total number of comments.
-func (r *PostgresCommentRepository) Count(ctx context.Context) (int64, error) {
-	var count int64
-	err := r.pool.QueryRow(ctx, "SELECT COUNT(*) FROM comments").Scan(&count)
-	if err != nil {
-		return 0, fmt.Errorf("count comments: %w", err)
-	}
-	return count, nil
-}
-
-// GetByID finds a comment by ID.
-func (r *PostgresCommentRepository) GetByID(ctx context.Context, id string) (*domain.Comment, error) {
-	var c domain.Comment
-	err := r.pool.QueryRow(ctx, `
-		SELECT id, body, article_id, user_id, created_at
-		FROM comments
-		WHERE id = $1
-	`, id).Scan(&c.ID, &c.Body, &c.ArticleID, &c.UserID, &c.CreatedAt)
-
-	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, fmt.Errorf("get comment by id: %w", err)
-	}
-
-	return &c, nil
 }

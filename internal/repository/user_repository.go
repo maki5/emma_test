@@ -4,9 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"strings"
 
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"bulk-import-export/internal/domain"
@@ -24,10 +24,15 @@ func NewPostgresUserRepository(pool *pgxpool.Pool) *PostgresUserRepository {
 
 // BulkInsert inserts users in bulk using CTE with pre-validation.
 func (r *PostgresUserRepository) BulkInsert(ctx context.Context, users []domain.User) domain.BatchResult {
+	// Pre-allocate errors slice to avoid expensive reallocations
+	estimatedErrors := len(users) / 10 // ~10% error rate estimate
+	if estimatedErrors < 10 {
+		estimatedErrors = 10
+	}
 	result := domain.BatchResult{
 		SuccessCount: 0,
 		FailedCount:  0,
-		Errors:       []domain.RecordError{},
+		Errors:       make([]domain.RecordError, 0, estimatedErrors),
 	}
 
 	if len(users) == 0 {
@@ -71,18 +76,23 @@ func (r *PostgresUserRepository) BulkInsert(ctx context.Context, users []domain.
 	}
 	defer rows.Close()
 
-	insertedRows := make(map[int]bool)
 	for rows.Next() {
 		var rowNum int
 		var success bool
 		var errorMsg *string
 
 		if err := rows.Scan(&rowNum, &success, &errorMsg); err != nil {
+			log.Printf("[user_repository] Failed to scan bulk insert result row: %v", err)
+			result.FailedCount++
+			result.Errors = append(result.Errors, domain.RecordError{
+				Row:    0,
+				Field:  "database",
+				Reason: fmt.Sprintf("scan error: %v", err),
+			})
 			continue
 		}
 
 		if success {
-			insertedRows[rowNum] = true
 			result.SuccessCount++
 		} else {
 			result.FailedCount++
@@ -132,7 +142,12 @@ func (r *PostgresUserRepository) buildBulkInsertQuery(users []domain.User) (stri
 	for i, u := range users {
 		values = append(values, fmt.Sprintf("($%d, $%d, $%d, $%d, $%d, $%d)",
 			argNum, argNum+1, argNum+2, argNum+3, argNum+4, argNum+5))
-		args = append(args, u.ID, u.Email, u.Name, u.Role, u.Active, i+1)
+		// Convert bool and int to string for CTE VALUES clause compatibility
+		activeStr := "false"
+		if u.Active {
+			activeStr = "true"
+		}
+		args = append(args, u.ID, u.Email, u.Name, u.Role, activeStr, fmt.Sprintf("%d", i+1))
 		argNum += 6
 	}
 
@@ -144,7 +159,8 @@ func (r *PostgresUserRepository) buildBulkInsertQuery(users []domain.User) (stri
 	// 5. Reports success only for rows that were actually inserted
 	query := fmt.Sprintf(`
 WITH input_data AS (
-    SELECT * FROM (VALUES %s) AS t(id, email, name, role, is_active, row_num)
+    SELECT id, email, name, role, is_active, row_num::integer AS row_num 
+    FROM (VALUES %s) AS t(id, email, name, role, is_active, row_num)
 ),
 existing_emails AS (
     SELECT email FROM users WHERE email IN (SELECT email FROM input_data)
@@ -206,33 +222,4 @@ func (r *PostgresUserRepository) StreamAll(ctx context.Context, callback func(do
 	}
 
 	return rows.Err()
-}
-
-// Count returns the total number of users.
-func (r *PostgresUserRepository) Count(ctx context.Context) (int64, error) {
-	var count int64
-	err := r.pool.QueryRow(ctx, "SELECT COUNT(*) FROM users").Scan(&count)
-	if err != nil {
-		return 0, fmt.Errorf("count users: %w", err)
-	}
-	return count, nil
-}
-
-// GetByEmail finds a user by email.
-func (r *PostgresUserRepository) GetByEmail(ctx context.Context, email string) (*domain.User, error) {
-	var u domain.User
-	err := r.pool.QueryRow(ctx, `
-		SELECT id, email, name, role, is_active, created_at, updated_at
-		FROM users
-		WHERE email = $1
-	`, email).Scan(&u.ID, &u.Email, &u.Name, &u.Role, &u.Active, &u.CreatedAt, &u.UpdatedAt)
-
-	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, fmt.Errorf("get user by email: %w", err)
-	}
-
-	return &u, nil
 }

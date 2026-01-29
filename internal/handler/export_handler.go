@@ -73,19 +73,13 @@ func (h *ExportHandler) CreateExport(c *gin.Context) {
 		return
 	}
 
-	if req.IdempotencyToken == "" {
-		req.IdempotencyToken = uuid.New().String()
-	}
-
-	if _, err := uuid.Parse(req.IdempotencyToken); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "idempotency_token must be a valid UUID"})
-		return
-	}
+	// IdempotencyToken is already validated as required UUID by binding tags
 
 	requestID := middleware.GetRequestID(c)
 	job, err := h.exportService.StartExport(c.Request.Context(), req.ResourceType, req.Format, req.IdempotencyToken, requestID)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Printf("[request_id=%s] Failed to start export: %v", requestID, err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to process export request"})
 		return
 	}
 
@@ -104,7 +98,8 @@ func (h *ExportHandler) GetExport(c *gin.Context) {
 
 	job, err := h.exportService.GetExportJob(c.Request.Context(), id)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Printf("[request_id=%s] Failed to get export job %s: %v", middleware.GetRequestID(c), id, err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to retrieve export job"})
 		return
 	}
 

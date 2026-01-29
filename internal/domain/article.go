@@ -18,14 +18,5 @@ type Article struct {
 }
 
 // ValidStatuses contains all valid article statuses.
+// This is the single source of truth for status validation across the application.
 var ValidStatuses = []string{"draft", "published", "archived"}
-
-// IsValidStatus checks if a status is valid.
-func IsValidStatus(status string) bool {
-	for _, s := range ValidStatuses {
-		if s == status {
-			return true
-		}
-	}
-	return false
-}
