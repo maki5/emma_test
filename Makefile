@@ -15,11 +15,13 @@ build:
 	@echo "🔨 Building..."
 	$(GO) build -o bin/$(BINARY_NAME) ./cmd/server
 
-## Start everything for local development (DB + migrations + app with logs)
-dev: db-start db-wait migrate-up
+## Start everything for local development (DB + monitoring + migrations + app)
+dev: db-start monitoring-start db-wait migrate-up
 	@echo "🚀 Starting application..."
 	@echo "📍 API: http://localhost:8080"
 	@echo "❤️  Health: http://localhost:8080/health"
+	@echo "📈 Prometheus: http://localhost:9090"
+	@echo "📊 Grafana: http://localhost:3000 (admin/admin)"
 	@echo ""
 	$(GO) run ./cmd/server
 
@@ -48,11 +50,6 @@ db-wait:
 	@until $(DOCKER_COMPOSE) exec -T postgres pg_isready -U postgres > /dev/null 2>&1; do sleep 1; done
 	@echo "✅ PostgreSQL is ready"
 
-## Stop PostgreSQL
-db-stop:
-	@echo "🛑 Stopping PostgreSQL..."
-	$(DOCKER_COMPOSE) down
-
 ## Run database migrations
 migrate-up:
 	@echo "🗄️  Running migrations..."
@@ -68,7 +65,7 @@ db-shell:
 	$(DOCKER_COMPOSE) exec postgres psql -U postgres -d bulk_import_export
 
 ## Reset database (destroy and recreate)
-db-reset: db-stop
+db-reset: stop
 	@echo "🔄 Resetting database..."
 	$(DOCKER_COMPOSE) down -v
 	$(MAKE) db-start db-wait migrate-up
@@ -111,41 +108,35 @@ mocks:
 # Cleanup
 # =============================================================================
 
+## Stop all services (DB + monitoring)
+stop:
+	@echo "🛑 Stopping all services..."
+	$(DOCKER_COMPOSE) down
+	@echo "✅ All services stopped"
+
 ## Clean build artifacts
 clean:
 	rm -rf bin/
 	rm -f coverage.out coverage.html
 
 ## Clean everything (including Docker volumes)
-clean-all: clean db-stop
+clean-all: clean stop
 	$(DOCKER_COMPOSE) down -v
 
 # =============================================================================
 # Monitoring
 # =============================================================================
 
-## Start Prometheus and Grafana for metrics and dashboards
+## Start Prometheus and Grafana
 monitoring-start:
 	@echo "📊 Starting monitoring stack..."
 	$(DOCKER_COMPOSE) up -d prometheus grafana
 	@echo "✅ Monitoring stack started"
-	@echo "📈 Prometheus: http://localhost:9090"
-	@echo "📊 Grafana: http://localhost:3000 (admin/admin)"
-	@echo "📋 Queries Reference: monitoring/prometheus/queries.md"
 
 ## Stop Prometheus and Grafana
 monitoring-stop:
 	@echo "🛑 Stopping monitoring stack..."
 	$(DOCKER_COMPOSE) stop prometheus grafana
-
-## Start everything (DB + monitoring)
-start-all: db-start monitoring-start db-wait migrate-up
-	@echo "✅ All services started"
-	@echo "📍 API: http://localhost:8080 (start with 'make dev' or 'make run')"
-	@echo "📈 Prometheus: http://localhost:9090"
-	@echo "📊 Grafana: http://localhost:3000 (admin/admin)"
-	@echo "📉 Metrics: http://localhost:8080/metrics"
-	@echo "📋 Queries Reference: monitoring/prometheus/queries.md"
 
 # =============================================================================
 # Setup
@@ -172,8 +163,9 @@ help:
 	@echo "Bulk Import/Export API - Development Commands"
 	@echo ""
 	@echo "Quick Start:"
-	@echo "  make dev        - Start DB, run migrations, and start app with logs"
+	@echo "  make dev        - Start everything (DB + monitoring + app)"
 	@echo "  make test-api   - Run API integration tests (requires running server)"
+	@echo "  make stop       - Stop all services"
 	@echo ""
 	@echo "Available targets:"
 	@grep -E '^## ' $(MAKEFILE_LIST) | sed 's/## /  /' | head -30

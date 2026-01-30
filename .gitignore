@@ -8,7 +8,7 @@ bin/
 *.dll
 *.so
 *.dylib
-server
+/server
 
 # Test artifacts
 coverage.out

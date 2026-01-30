@@ -1,16 +1,111 @@
 # Bulk Import/Export System
 
-## Overview
-
-A high-performance bulk data import/export system built with Go and Gin framework. Handles users, articles, and comments with async imports, streaming/async exports, per-record error tracking, and Prometheus metrics.
+High-performance bulk data import/export API built with Go. Handles users, articles, and comments with async processing, streaming exports, and Prometheus metrics.
 
 ---
 
-## Documentation
+## Quick Start
 
-| Document | Description |
-|----------|-------------|
-| [API Specification](./api-specification.md) | Complete endpoint documentation with examples |
+```bash
+# Start everything (DB + monitoring + migrations + app)
+make dev
+
+# Stop all services
+make stop
+
+# Run API tests (requires running server)
+make test-api
+```
+
+**Access Points:**
+
+| Service | URL | Credentials |
+|---------|-----|-------------|
+| API | http://localhost:8080 | - |
+| Health Check | http://localhost:8080/health | - |
+| Metrics | http://localhost:8080/metrics | - |
+| Prometheus | http://localhost:9090 | - |
+| Grafana | http://localhost:3000 | admin/admin |
+
+---
+
+## Development Workflow
+
+### Running Tests
+
+```bash
+make test          # Unit tests
+make test-api      # API integration tests (requires running server)
+make test-coverage # Tests with coverage report
+```
+
+### Code Quality
+
+```bash
+make fmt           # Format code
+make lint          # Run linter
+make vet           # Run go vet
+```
+
+### Database Operations
+
+```bash
+make db-reset      # Reset database (destroy and recreate)
+make db-shell      # Open database shell
+make migrate-up    # Run migrations
+make migrate-down  # Rollback migrations
+```
+
+---
+
+## Make Commands Reference
+
+| Command | Description |
+|---------|-------------|
+| `make dev` | Start everything (DB + monitoring + app) |
+| `make stop` | Stop all services |
+| `make test-api` | Run API integration tests |
+| `make test` | Run unit tests |
+| `make build` | Build binary |
+| `make run` | Run app (without starting infrastructure) |
+| `make clean` | Clean build artifacts |
+| `make clean-all` | Clean everything including Docker volumes |
+| `make help` | Show all available commands |
+
+---
+
+## API Endpoints
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/health` | Health check with DB status |
+| GET | `/ready` | Kubernetes readiness probe |
+| GET | `/live` | Kubernetes liveness probe |
+| GET | `/metrics` | Prometheus metrics |
+| POST | `/api/v1/imports` | Start async import job |
+| GET | `/api/v1/imports/:id` | Get import job status |
+| GET | `/api/v1/exports/:resource/stream` | Stream export (download) |
+| POST | `/api/v1/exports` | Start async export job |
+| GET | `/api/v1/exports/:id` | Get export job status |
+| GET | `/api/v1/exports/:id/download` | Download completed export |
+
+See [api-specification.md](./api-specification.md) for detailed documentation.
+
+---
+
+## Architecture
+
+| Layer | Purpose |
+|-------|---------|
+| Handler | HTTP request handling, validation |
+| Service | Business logic, worker pools, batch processing |
+| Repository | Database access with CTE-based bulk operations |
+
+**Key Features:**
+- Worker pools for controlled concurrency
+- Per-batch transactions with per-record error tracking
+- Idempotency via unique tokens
+- Streaming exports with database cursors
 
 ---
 
@@ -20,102 +115,9 @@ A high-performance bulk data import/export system built with Go and Gin framewor
 |----------|------------|
 | Language | Go 1.24 |
 | Framework | Gin |
-| Database | PostgreSQL 15 (pgx driver) |
-| Validation | ozzo-validation |
+| Database | PostgreSQL 15 (pgx) |
 | Metrics | Prometheus + Grafana |
 | Testing | mockery + testcontainers |
-
----
-
-## Architecture
-
-**3-Layer Design:**
-
-| Layer | Components | Purpose |
-|-------|------------|---------|
-| Handler | Import, Export, Health handlers | HTTP request handling |
-| Service | ImportService, ExportService | Business logic, worker pools |
-| Repository | User, Article, Comment, Job repos | Database access |
-
-**Key Patterns:**
-- Worker pools for controlled concurrency
-- Batch processing with per-batch transactions
-- CTE-based bulk inserts for conflict handling
-- Idempotency via unique tokens
-- Streaming exports with database cursors
-
----
-
-## Database Schema
-
-| Table | Key Constraints |
-|-------|-----------------|
-| users | email UNIQUE |
-| articles | slug UNIQUE, author_id FK → users |
-| comments | article_id FK → articles, user_id FK → users |
-| import_jobs | idempotency_token UNIQUE |
-| export_jobs | idempotency_token UNIQUE |
-
-**Import order:** users → articles → comments (respects FK dependencies)
-
----
-
-## Validation
-
-| Layer | Validates | Purpose |
-|-------|-----------|---------|
-| App-side | Format, limits, enums | Fast-fail with rich errors |
-| DB-side | UNIQUE, FOREIGN KEY | Race condition safety |
-
----
-
-## Metrics & Monitoring
-
-| Metric Type | Examples |
-|-------------|----------|
-| HTTP | Request count, latency (P50/P90/P99), in-flight |
-| Jobs | Completion rate, duration, in-progress count |
-| Records | Processed count, success/failure rate |
-| Database | Connection pool utilization |
-
-**Access:** Prometheus at `:9090`, Grafana at `:3000` with pre-configured dashboards.
-
----
-
-## Testing
-
-| Level | Tool | Scope |
-|-------|------|-------|
-| Unit | mockery | Handler, Service layer |
-| Integration | testcontainers | Repository with real PostgreSQL |
-| E2E | curl scripts | Full API flows |
-
----
-
-## Quick Start
-
-1. Start PostgreSQL: `make db-start`
-2. Run migrations: `make migrate-up`
-3. Start app: `make run`
-4. Access API at http://localhost:8080
-
-For monitoring: `make monitoring-start` (Prometheus + Grafana)
-
----
-
-## API Endpoints
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/health` | Health check |
-| GET | `/ready` | Readiness probe |
-| GET | `/live` | Liveness probe |
-| GET | `/metrics` | Prometheus metrics |
-| POST | `/api/v1/imports` | Start import job |
-| GET | `/api/v1/imports/:id` | Get import status |
-| GET | `/api/v1/exports/:resource/stream` | Stream export |
-| POST | `/api/v1/exports` | Start async export |
-| GET | `/api/v1/exports/:id` | Get export status |
 
 ---
 
@@ -124,7 +126,7 @@ For monitoring: `make monitoring-start` (Prometheus + Grafana)
 | Variable | Default | Description |
 |----------|---------|-------------|
 | HTTP_PORT | 8080 | Server port |
-| DATABASE_URL | required | PostgreSQL URL |
-| WORKER_POOL_SIZE | 10 | Concurrent workers |
+| DATABASE_URL | required | PostgreSQL connection URL |
+| WORKER_POOL_SIZE | 10 | Concurrent import workers |
 | BATCH_SIZE | 1000 | Records per batch |
 | EXPORT_DIR | ./exports | Export file directory |
