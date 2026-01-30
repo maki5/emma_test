@@ -84,10 +84,9 @@ make migrate-down  # Rollback migrations
 | GET | `/metrics` | Prometheus metrics |
 | POST | `/api/v1/imports` | Start async import job |
 | GET | `/api/v1/imports/:id` | Get import job status |
-| GET | `/api/v1/exports/:resource/stream` | Stream export (download) |
 | POST | `/api/v1/exports` | Start async export job |
+| GET | `/api/v1/exports` | Stream export (query params: resource, format) |
 | GET | `/api/v1/exports/:id` | Get export job status |
-| GET | `/api/v1/exports/:id/download` | Download completed export |
 
 See [api-specification.md](./api-specification.md) for detailed documentation.
 
